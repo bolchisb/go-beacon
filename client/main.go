@@ -46,6 +46,8 @@ func main() {
 		err = cmdInstall(rest)
 	case "uninstall":
 		err = cmdUninstall(rest)
+	case "update":
+		err = cmdUpdate(rest)
 	case "start", "stop", "restart":
 		err = cmdServiceControl(cmd, rest)
 	case "version", "--version", "-v":
@@ -73,6 +75,7 @@ var commands = []command{
 	{"status", "show whether the agent is connected"},
 	{"run", "run the agent in the foreground"},
 	{"install", "install the agent as a system service"},
+	{"update", "replace this binary with the latest release"},
 	{"uninstall", "remove the service and the installed binary"},
 	{"start", "start the installed service"},
 	{"stop", "stop the installed service"},

@@ -9,13 +9,20 @@ import (
 // cmdConfig shows the effective settings and, crucially, where each value came
 // from. Without the source column this command would just be `cat`.
 func cmdConfig(args []string) error {
-	if len(args) > 0 && args[0] == "set" {
-		return configSet(args[1:])
+	showOnly := false
+	if len(args) > 0 {
+		switch args[0] {
+		case "set":
+			return configSet(args[1:])
+		case "show":
+			showOnly, args = true, args[1:]
+		}
 	}
 
 	fs := flag.NewFlagSet("beacon config", flag.ExitOnError)
 	fs.Usage = func() {
-		usageFor(fs, "beacon config [set KEY=VALUE ...]", "Show or change the stored settings.")
+		usageFor(fs, "beacon config [show | set KEY=VALUE ...]",
+			"Edit the settings interactively, or show them.")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -24,6 +31,12 @@ func cmdConfig(args []string) error {
 	r, err := loadConfig(nil)
 	if err != nil {
 		return err
+	}
+
+	// the editor needs a terminal on both ends; piped or scripted, this stays
+	// the read-only view it has always been
+	if !showOnly && isInteractive() {
+		return runConfigForm(r)
 	}
 
 	p := &panel{title: "config", right: version}

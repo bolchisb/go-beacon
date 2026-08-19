@@ -18,7 +18,7 @@ PLATFORMS ?= windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 da
 
 GH_REPO ?= bolchisb/go-beacon
 
-.PHONY: up down logs tidy vet build client release clean
+.PHONY: up down logs tidy vet test build client release clean
 
 ## up: build and start the relay
 up:
@@ -38,6 +38,9 @@ tidy:
 vet:
 	$(GO_RUN) sh -c "go vet ./... && gofmt -l ."
 
+test:
+	$(GO_RUN) go test ./...
+
 build:
 	$(COMPOSE) build
 
@@ -49,7 +52,7 @@ client:
 	  if [ "$$os" = windows ]; then ext=".exe"; fi; \
 	  echo "building $$os/$$arch"; \
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath \
-	    -ldflags "-s -w -X main.version=$(VERSION)" \
+	    -ldflags "-s -w -X main.version=$(VERSION) -X main.updateRepo=$(GH_REPO)" \
 	    -o dist/beacon-$$os-$$arch$$ext ./client; \
 	done'
 	@ls -lh dist/
