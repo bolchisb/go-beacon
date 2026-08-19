@@ -17,6 +17,11 @@ type Config struct {
 	AgentID string `json:"agent_id"`
 	CAFile  string `json:"ca_file,omitempty"`
 
+	// AutoUpdate is a pointer so that an absent field means enabled: an agent
+	// on a machine nobody can reach must not be left behind by a config written
+	// before the setting existed.
+	AutoUpdate *bool `json:"auto_update,omitempty"`
+
 	// Services maps a forwardable service name to the local address the agent
 	// dials for it. Absent entries fall back to the built-in defaults; an empty
 	// address withdraws a service. Edited in the file, not in the form: this is
@@ -77,6 +82,7 @@ func loadConfig(flags map[string]string) (*resolved, error) {
 		// Services has no flag and no environment variable, so it is carried
 		// straight across rather than going through set()
 		r.Services = fc.Services
+		r.AutoUpdate = fc.AutoUpdate
 		r.set(keyServer, fc.Server, fromFile)
 		r.set(keyID, fc.AgentID, fromFile)
 		r.set(keyCA, fc.CAFile, fromFile)
@@ -108,6 +114,11 @@ func (r *resolved) set(key, value string, src source) {
 		return
 	}
 	r.sources[key] = src
+}
+
+// autoUpdate reports whether the agent should update itself.
+func (r *resolved) autoUpdate() bool {
+	return r.AutoUpdate == nil || *r.AutoUpdate
 }
 
 func (r *resolved) value(key string) string {

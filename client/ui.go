@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -173,17 +172,34 @@ func fixed(s string, w int) string {
 	return s
 }
 
-// elide shortens plain text to fit. Paths lose their head rather than their
-// tail: the file name is what identifies them.
+// elide shortens plain text to fit. A path loses its head, because the file
+// name is what identifies it; anything else loses its tail, because the first
+// words are what explain it.
+//
+// The test is deliberately narrow. Asking merely whether a slash appears makes
+// "i/o timeout" look like a path, and an error message elided from the wrong
+// end says nothing at all.
 func elide(s string, w int) string {
 	if w < 4 || lipgloss.Width(s) <= w {
 		return s
 	}
 	r := []rune(s)
-	if strings.ContainsRune(s, os.PathSeparator) || strings.Contains(s, "/") {
+	if looksLikePath(s) {
 		return "…" + string(r[len(r)-(w-1):])
 	}
 	return string(r[:w-1]) + "…"
+}
+
+func looksLikePath(s string) bool {
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, `\`) {
+		return true
+	}
+	// a windows path: a drive letter, a colon, a separator
+	if len(s) >= 3 && s[1] == ':' && (s[2] == '\\' || s[2] == '/') {
+		c := s[0] | 0x20
+		return c >= 'a' && c <= 'z'
+	}
+	return false
 }
 
 func humanBytes(n uint64) string {

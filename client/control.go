@@ -34,6 +34,7 @@ type statusPayload struct {
 	PID        int        `json:"pid"`
 	StartedAt  time.Time  `json:"started_at"`
 	Connected  bool       `json:"connected"`
+	Connecting bool       `json:"connecting"`
 	Since      time.Time  `json:"since"`
 	RTTms      *float64   `json:"rtt_ms"`
 	Streams    int        `json:"streams"`
@@ -63,6 +64,10 @@ func newAgentState(agentID, server, configPath string) *agentState {
 		ConfigPath: configPath,
 		PID:        os.Getpid(),
 		StartedAt:  time.Now(),
+		// Since has to start somewhere: an agent that has never managed to
+		// connect is offline as of now, not since the zero time, which renders
+		// as a couple of centuries.
+		Since: time.Now(),
 	}}
 	st.rttNanos.Store(-1)
 	return st
@@ -73,6 +78,7 @@ func (s *agentState) connected(sess *yamux.Session, conn *protocol.CountingConn)
 	defer s.mu.Unlock()
 	s.sess, s.conn = sess, conn
 	s.base.Connected = true
+	s.base.Connecting = false
 	s.base.Since = time.Now()
 	s.lastError = ""
 	s.nextRetry = nil
@@ -87,6 +93,7 @@ func (s *agentState) disconnected(err error, nextRetry time.Time) {
 		s.base.Since = time.Now()
 	}
 	s.base.Connected = false
+	s.base.Connecting = false
 	if err != nil {
 		s.lastError = err.Error()
 	}
@@ -97,6 +104,15 @@ func (s *agentState) disconnected(err error, nextRetry time.Time) {
 		s.nextRetry = &t
 	}
 	s.rttNanos.Store(-1)
+}
+
+// connecting marks an attempt as in flight, so status can say so instead of
+// reporting a retry time that has already passed.
+func (s *agentState) connecting() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.base.Connecting = true
+	s.nextRetry = nil
 }
 
 func (s *agentState) snapshot() statusPayload {

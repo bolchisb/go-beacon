@@ -49,11 +49,18 @@ func cmdStatus(args []string) error {
 		p.kv("traffic", fmt.Sprintf("%s in / %s out", humanBytes(st.BytesIn), humanBytes(st.BytesOut)))
 
 	case err == nil:
-		p.status(styWarn, "RECONNECTING", "offline for "+humanDuration(time.Since(st.Since)))
+		state, detail := "RECONNECTING", "offline for "+humanDuration(time.Since(st.Since))
+		if st.Connecting {
+			state = "CONNECTING"
+		}
+		p.status(styWarn, state, detail)
 		p.blank()
 		p.kv("agent", st.AgentID)
 		p.kv("relay", st.Server)
-		if st.NextRetry != nil {
+		switch {
+		case st.Connecting:
+			p.kv("next try", "in progress")
+		case st.NextRetry != nil:
 			p.kv("next try", "in "+humanDuration(time.Until(*st.NextRetry)))
 		}
 		if st.LastError != "" {

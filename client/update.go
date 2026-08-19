@@ -34,7 +34,7 @@ func cmdUpdate(args []string) error {
 		return err
 	}
 
-	exe, err := os.Executable()
+	exe, err := updateTarget()
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func cmdUpdate(args []string) error {
 	if err := replaceBinary(exe, blob); err != nil {
 		return err
 	}
-	restarted := restartAfterUpdate()
+	restarted := applyRestart(exe)
 
 	p := resultPanel("update", markDone, styOK, "UPDATED", "")
 	p.kv("from", version)
@@ -182,9 +182,14 @@ func verifyChecksum(tag string, blob []byte) error {
 }
 
 // replaceBinary writes the new build beside the old one and renames it into
-// place. A running executable cannot be written to, but it can be renamed
-// over, and the rename is atomic: a failed download never leaves a half binary
-// where the working one used to be.
+// place. A running executable cannot be written to, but it can be renamed over,
+// and the rename is atomic: a failed download never leaves a half binary where
+// the working one used to be.
+//
+// The previous build is kept as .old on every platform. Windows needs it moved
+// aside because it refuses to replace a running image; the others do not, but
+// without a copy there would be nothing to roll back to, and rollback is the
+// only thing standing between a bad release and an unreachable fleet.
 func replaceBinary(exe string, blob []byte) error {
 	staged := exe + ".new"
 	if err := os.WriteFile(staged, blob, 0o755); err != nil {
@@ -196,14 +201,21 @@ func replaceBinary(exe string, blob []byte) error {
 		return err
 	}
 
-	if runtime.GOOS == "windows" {
-		// windows refuses to replace a running image, but it allows moving it
-		if err := os.Rename(exe, exe+".old"); err != nil {
+	previous := exe + ".old"
+	os.Remove(previous)
+	movedAside := false
+	if _, err := os.Stat(exe); err == nil {
+		if err := os.Rename(exe, previous); err != nil {
 			os.Remove(staged)
-			return err
+			return elevationHint(exe, err)
 		}
+		movedAside = true
 	}
+
 	if err := os.Rename(staged, exe); err != nil {
+		if movedAside {
+			os.Rename(previous, exe) // put the working build back
+		}
 		os.Remove(staged)
 		return elevationHint(exe, err)
 	}
@@ -227,22 +239,27 @@ func guardActiveStreams(force bool) error {
 	return fmt.Errorf("%d stream(s) in use right now; wait, or pass --force to interrupt them", st.Streams)
 }
 
-// restartAfterUpdate returns what happened to the running agent, so the panel
-// can say it rather than leaving the operator to guess.
-func restartAfterUpdate() string {
+// applyRestart puts the new binary into service and reports what happened, so
+// the panel can say it rather than leaving the operator to guess.
+//
+// This runs in a process the service manager is not about to stop, so it can do
+// the restart, the verification and any rollback itself; the detached helper
+// exists for the case where it cannot, which is the agent updating itself.
+func applyRestart(target string) string {
 	svc, err := serviceStatus()
 	if err == nil && svc.Installed && svc.Running {
-		step("restarting service")
-		if err := serviceStop(); err != nil {
-			return "restart failed: " + err.Error()
+		step("restarting service and verifying")
+		if err := restartAndVerify(target); err != nil {
+			return err.Error()
 		}
+		return "service restarted and answering"
+	}
+	if err == nil && svc.Installed {
+		step("starting service")
 		if err := serviceStart(); err != nil {
-			return "restart failed: " + err.Error()
+			return "service would not start: " + err.Error()
 		}
-		if settled(true).Running {
-			return "service restarted"
-		}
-		return "service did not come back, check its log"
+		return "service started"
 	}
 
 	if _, _, err := fetchStatus(); err == nil {

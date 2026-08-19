@@ -150,9 +150,21 @@ func serviceInstall(target string) error {
 
 	// the agent is the only way back into the machine, so a crash must not
 	// leave it stopped
-	return s.SetRecoveryActions([]mgr.RecoveryAction{
+	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
-	}, 86400)
+	}, 86400); err != nil {
+		return err
+	}
+
+	// By default the SCM only reacts when a service dies without reporting
+	// SERVICE_STOPPED. This makes a clean exit with a non-zero code count too,
+	// which is the difference between a graceful self-restart and pretending to
+	// crash. Microsoft documents it as taking effect at the next boot, so it is
+	// a safety net for later rather than something to rely on today.
+	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		slog.Warn("could not enable recovery on clean failure", "err", err)
+	}
+	return nil
 }
 
 func serviceUninstall() error {

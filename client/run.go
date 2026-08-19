@@ -106,6 +106,16 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 		p.show()
 	}
 
+	// Only the installed agent updates itself. A developer running `beacon run`
+	// by hand must not have the binary swapped underneath them.
+	if cfg.autoUpdate() && isServiceInstance() {
+		target, err := updateTarget()
+		if err == nil {
+			slog.Info("auto-update enabled", "every", autoUpdateInterval, "binary", target)
+			go autoUpdateLoop(ctx, target)
+		}
+	}
+
 	slog.Info("agent starting", "id", hello.AgentID, "server", cfg.Server,
 		"platform", hello.OS+"/"+hello.Arch, "version", version)
 
@@ -122,6 +132,7 @@ func supervise(ctx context.Context, server string, hello protocol.Hello, tlsCfg 
 
 	for ctx.Err() == nil {
 		start := time.Now()
+		st.connecting()
 		err := runSession(ctx, server, hello, tlsCfg, st)
 		if ctx.Err() != nil {
 			return

@@ -168,7 +168,12 @@ func upgrade(conn net.Conn, u *url.URL, hello protocol.Hello) (net.Conn, error) 
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
-		return nil, err
+		// The connection was accepted and the request went out, so the network
+		// is fine and something in front of the relay is holding the upgrade.
+		// Saying so is the difference between looking at the proxy and looking
+		// at the firewall.
+		return nil, fmt.Errorf("connected, but the upgrade went unanswered for %s "+
+			"(a proxy in the path may not be passing it through): %w", handshakeTimeout, err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		return nil, fmt.Errorf("upgrade rejected: %s", resp.Status)

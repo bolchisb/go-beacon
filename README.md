@@ -99,9 +99,16 @@ That registers it as a system service and starts it. Other commands:
 | `beacon config` | Show every setting and where its value came from |
 | `beacon ssh` | Open a terminal on a machine, in this terminal |
 | `beacon forward` | Open a local port that leads to a service on a remote machine |
-| `beacon update` | Replace the binary with the latest release |
+| `beacon update` | Replace the binary with the latest release, verify it, roll back if it fails |
 | `beacon start` / `stop` / `restart` | Control the installed service |
 | `beacon uninstall` | Remove the service and the binary |
+
+The installed agent checks for a new release every hour and updates itself. The
+check is jittered so a fleet does not arrive at GitHub together, it is skipped
+while anyone has a session open through that agent, and the restart is handed to
+a separate process which puts the previous binary back if the new one does not
+come up. Set `"auto_update": false` in the config file to turn it off; only the
+installed service updates itself, never a copy you are running by hand.
 
 An agent's warnings and errors are sent to the relay and appear in the
 dashboard's event feed, which is usually where you want them: a machine you
