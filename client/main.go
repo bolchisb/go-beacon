@@ -53,6 +53,8 @@ func main() {
 		err = cmdForward(rest)
 	case "update":
 		err = cmdUpdate(rest)
+	case "restart-after-update": // internal, spawned by the agent
+		err = cmdRestartAfterUpdate(rest)
 	case "start", "stop", "restart":
 		err = cmdServiceControl(cmd, rest)
 	case "version", "--version", "-v":
