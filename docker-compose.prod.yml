@@ -4,6 +4,13 @@
 #
 #   BEACON_IMAGE_TAG=v1.2.3 docker compose -f docker-compose.prod.yml up -d
 #
+# The ${...} values below are read by Compose itself from a .env file in this
+# directory, which it loads automatically -- see .env.example for the template.
+# They are interpolation variables and never reach the container. The container
+# process is configured through `environment:` instead, so putting BEACON_LISTEN
+# in .env has no effect: the container always listens on 8080 and the host port
+# is chosen by the port mapping.
+#
 # The relay is expected to sit behind a TLS-terminating reverse proxy: the
 # dashboard is unauthenticated and the agent tunnel is plain HTTP until mTLS
 # lands. Two things the proxy must get right, or the relay silently degrades:
