@@ -69,11 +69,29 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 	}
 	st := newAgentState(cfg.AgentID, cfg.Server, configPath)
 
-	if sock, err := serveControl(ctx, st); err != nil {
+	sock, sockErr := serveControl(ctx, st)
+	if sockErr != nil {
 		// the agent is still fully functional, only `beacon status` is blind
-		slog.Warn("control socket unavailable", "err", err)
+		slog.Warn("control socket unavailable", "err", sockErr)
 	} else {
 		slog.Info("control socket ready", "path", sock)
+	}
+
+	// run by hand, say what is about to happen; run by a service manager,
+	// keep the log free of decoration
+	if isInteractive() {
+		p := resultPanel("run", markLive, styOK, "STARTING", "")
+		p.kv("agent", cfg.AgentID)
+		p.kv("relay", cfg.Server)
+		p.kv("platform", hello.OS+"/"+hello.Arch)
+		if configPath != "" {
+			p.kv("config", configPath)
+		}
+		if sockErr == nil {
+			p.kv("socket", sock)
+		}
+		p.footer = "ctrl-c to stop"
+		p.show()
 	}
 
 	slog.Info("agent starting", "id", hello.AgentID, "server", cfg.Server,

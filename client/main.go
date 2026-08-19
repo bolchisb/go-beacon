@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -22,7 +23,7 @@ func main() {
 	// to read, so this has to come first
 	if handled, err := runUnderServiceManager(); handled {
 		if err != nil {
-			fail(err)
+			fail("service", err)
 		}
 		return
 	}
@@ -60,12 +61,16 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fail(err)
+		fail(cmd, err)
 	}
 }
 
-func fail(err error) {
-	fmt.Fprintln(os.Stderr, styErr.Render("error")+" "+err.Error())
+// fail reports through the same panel as every other outcome, unless the
+// command already rendered its own explanation.
+func fail(command string, err error) {
+	if !errors.Is(err, errSilent) {
+		fmt.Fprint(os.Stderr, errorPanel(command, err))
+	}
 	os.Exit(1)
 }
 

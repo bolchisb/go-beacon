@@ -94,6 +94,23 @@ func configSet(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s written\n", path)
+
+	p := resultPanel("config set", markDone, styOK, "SAVED", "")
+	p.kv(keyServer, orNotSet(current.Server))
+	p.kv(keyID, orNotSet(current.AgentID))
+	p.kv(keyCA, orNotSet(current.CAFile))
+	p.footer = path
+	p.show()
+
+	if svc, err := serviceStatus(); err == nil && svc.Running {
+		fmt.Println(styDim.Render("  restart the agent:  beacon restart"))
+	}
 	return nil
+}
+
+func orNotSet(v string) string {
+	if v == "" {
+		return "not set"
+	}
+	return v
 }

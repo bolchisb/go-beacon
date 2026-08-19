@@ -63,12 +63,54 @@ func (p *panel) kv2(l1, v1, l2, v2 string) {
 	p.rows = append(p.rows, left+styLabel.Render(fixed(l2, 9))+styValue.Render(v2))
 }
 
-func (p *panel) status(style lipgloss.Style, state, detail string) {
-	row := style.Render("● " + state)
+// Marks carry the meaning colour alone cannot: a tick for something that was
+// done, a filled dot for something that is live, a hollow one for idle.
+const (
+	markDone = "✓"
+	markLive = "●"
+	markIdle = "○"
+	markFail = "✗"
+	markWarn = "!"
+)
+
+func (p *panel) statusMark(style lipgloss.Style, mark, state, detail string) {
+	row := style.Render(mark + " " + state)
 	if detail != "" {
 		row += strings.Repeat(" ", max(1, 21-lipgloss.Width(row))) + styDim.Render(detail)
 	}
 	p.rows = append(p.rows, row)
+}
+
+func (p *panel) status(style lipgloss.Style, state, detail string) {
+	p.statusMark(style, markLive, state, detail)
+}
+
+// resultPanel is the shape every command reports through, so the answer to
+// "did that work" always looks the same and is never absent.
+func resultPanel(title, mark string, style lipgloss.Style, state, detail string) *panel {
+	p := &panel{title: title, right: version}
+	p.blank()
+	p.statusMark(style, mark, state, detail)
+	p.blank()
+	return p
+}
+
+// show prints a panel, adding the trailing blank line the layout expects.
+func (p *panel) show() {
+	p.blank()
+	fmt.Print(p.render())
+}
+
+// step reports progress for work slow enough that silence would look like a hang.
+func step(format string, args ...any) {
+	fmt.Println(styDim.Render("  " + fmt.Sprintf(format, args...)))
+}
+
+func errorPanel(command string, err error) string {
+	p := resultPanel(command, markFail, styErr, "FAILED", "")
+	p.kv("error", err.Error())
+	p.blank()
+	return p.render()
 }
 
 func (p *panel) render() string {

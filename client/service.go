@@ -1,11 +1,17 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// errSilent ends a command with a non-zero status after its panel has already
+// explained what went wrong, so the failure is not reported twice.
+var errSilent = errors.New("")
 
 // svcInfo is what the platform service manager can tell us.
 type svcInfo struct {
@@ -40,22 +46,66 @@ func cmdInstall(args []string) error {
 	if err := requireElevation(); err != nil {
 		return err
 	}
+
+	before, _ := serviceStatus()
+
+	step("installing binary")
 	if err := copyExecutable(target); err != nil {
 		return err
 	}
+	step("writing config")
 	if _, err := saveConfig(cfg.Config); err != nil {
 		return err
 	}
+	step("registering service")
 	if err := serviceInstall(target); err != nil {
 		return err
 	}
+	step("starting service")
 	if err := serviceStart(); err != nil {
 		return err
 	}
 
-	fmt.Printf("installed %s\nconfig   %s\nrelay    %s\n\nrun `beacon status` to check it\n",
-		target, configPath(), cfg.Server)
+	state := "INSTALLED"
+	if before.Installed {
+		state = "REINSTALLED"
+	}
+	p := resultPanel("install", markDone, styOK, state, "")
+	p.kv("binary", target)
+	p.kv("config", configPath())
+	p.kv("relay", cfg.Server)
+	p.kv("agent id", cfg.AgentID)
+	p.kv("service", serviceStateText(settled(true)))
+	p.footer = "beacon status"
+	p.show()
 	return nil
+}
+
+// settled waits briefly for the service manager to reach the state we asked
+// for, so the panel reports what actually happened rather than what was
+// requested. Reporting success on a service that failed to come up would be
+// worse than reporting nothing.
+func settled(wantRunning bool) svcInfo {
+	var info svcInfo
+	for i := 0; i < 20; i++ {
+		var err error
+		if info, err = serviceStatus(); err == nil && info.Running == wantRunning {
+			return info
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return info
+}
+
+func serviceStateText(info svcInfo) string {
+	switch {
+	case !info.Installed:
+		return "not installed"
+	case info.Running:
+		return "running"
+	default:
+		return "registered, not running"
+	}
 }
 
 func cmdUninstall(args []string) error {
@@ -79,7 +129,12 @@ func cmdUninstall(args []string) error {
 		return err
 	}
 
-	fmt.Printf("service and binary removed\nconfig left at %s\n", configPath())
+	p := resultPanel("uninstall", markDone, styOK, "REMOVED", "")
+	p.kv("service", "unregistered")
+	p.kv("binary", installPath())
+	p.kv("config", "kept at "+configPath())
+	p.footer = "beacon install to set it up again"
+	p.show()
 	return nil
 }
 
@@ -93,17 +148,74 @@ func cmdServiceControl(name string, args []string) error {
 		return err
 	}
 
-	switch name {
-	case "start":
-		return serviceStart()
-	case "stop":
-		return serviceStop()
-	default:
+	before, err := serviceStatus()
+	if err != nil {
+		return err
+	}
+	if !before.Installed {
+		p := resultPanel(name, markFail, styErr, "NOT INSTALLED", "")
+		p.kv("install", "beacon install --server https://relay.example.com")
+		p.show()
+		return errSilent
+	}
+
+	switch {
+	case name == "start" && before.Running:
+		p := resultPanel(name, markLive, styOK, "ALREADY RUNNING", "")
+		p.kv("service", "running")
+		p.footer = "beacon status"
+		p.show()
+		return nil
+
+	case name == "stop" && !before.Running:
+		p := resultPanel(name, markIdle, styDim, "ALREADY STOPPED", "")
+		p.kv("service", "registered, not running")
+		p.show()
+		return nil
+
+	case name == "start":
+		step("starting service")
+		if err := serviceStart(); err != nil {
+			return err
+		}
+
+	case name == "stop":
+		step("stopping service")
 		if err := serviceStop(); err != nil {
 			return err
 		}
-		return serviceStart()
+
+	default:
+		step("stopping service")
+		if before.Running {
+			if err := serviceStop(); err != nil {
+				return err
+			}
+		}
+		step("starting service")
+		if err := serviceStart(); err != nil {
+			return err
+		}
 	}
+
+	wantRunning := name != "stop"
+	after := settled(wantRunning)
+	if after.Running != wantRunning {
+		p := resultPanel(name, markWarn, styWarn, "UNCONFIRMED", "")
+		p.kv("service", serviceStateText(after))
+		p.kv("hint", "check the service log")
+		p.show()
+		return errSilent
+	}
+
+	state := map[string]string{"start": "STARTED", "stop": "STOPPED", "restart": "RESTARTED"}[name]
+	p := resultPanel(name, markDone, styOK, state, "")
+	p.kv("service", serviceStateText(after))
+	if wantRunning {
+		p.footer = "beacon status"
+	}
+	p.show()
+	return nil
 }
 
 // copyExecutable puts the running binary somewhere stable. A service must not

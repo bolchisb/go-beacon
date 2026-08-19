@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -48,6 +49,9 @@ func installPlan(cfg *resolved, target string) string {
 
 func serviceInstall(target string) error {
 	if runtime.GOOS == "darwin" {
+		if err := os.MkdirAll(filepath.Dir(launchdPlist), 0o755); err != nil {
+			return err
+		}
 		if err := os.WriteFile(launchdPlist, []byte(plistContent(target)), 0o644); err != nil {
 			return err
 		}
@@ -56,6 +60,9 @@ func serviceInstall(target string) error {
 		return run("launchctl", "bootstrap", "system", launchdPlist)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(systemdUnit), 0o755); err != nil {
+		return err
+	}
 	if err := os.WriteFile(systemdUnit, []byte(unitContent(target)), 0o644); err != nil {
 		return err
 	}

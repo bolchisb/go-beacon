@@ -48,14 +48,23 @@ func cmdUpdate(args []string) error {
 
 	if *check {
 		if latest == version {
-			fmt.Printf("  %s is the latest release\n", version)
-		} else {
-			fmt.Printf("  %s available, running %s\n", latest, version)
+			p := resultPanel("update", markDone, styOK, "UP TO DATE", "")
+			p.kv("version", version)
+			p.show()
+			return nil
 		}
+		p := resultPanel("update", markWarn, styWarn, "UPDATE AVAILABLE", "")
+		p.kv("running", version)
+		p.kv("latest", latest)
+		p.footer = "beacon update to apply it"
+		p.show()
 		return nil
 	}
 	if latest == version && !*force {
-		fmt.Printf("  already on %s\n", version)
+		p := resultPanel("update", markDone, styOK, "UP TO DATE", "")
+		p.kv("version", version)
+		p.footer = "beacon update --force to reinstall anyway"
+		p.show()
 		return nil
 	}
 
@@ -63,20 +72,30 @@ func cmdUpdate(args []string) error {
 		return err
 	}
 
-	fmt.Printf("  downloading %s %s\n", latest, assetName())
+	step("downloading %s (%s)", latest, assetName())
 	blob, err := download(assetURL(latest, assetName()))
 	if err != nil {
 		return err
 	}
+	step("verifying checksum")
 	if err := verifyChecksum(latest, blob); err != nil {
 		return err
 	}
+	step("replacing binary")
 	if err := replaceBinary(exe, blob); err != nil {
 		return err
 	}
-	fmt.Printf("  %s replaced with %s\n", exe, latest)
+	restarted := restartAfterUpdate()
 
-	return restartAfterUpdate()
+	p := resultPanel("update", markDone, styOK, "UPDATED", "")
+	p.kv("from", version)
+	p.kv("to", latest)
+	p.kv("binary", exe)
+	p.kv("size", humanBytes(uint64(len(blob))))
+	p.kv("agent", restarted)
+	p.footer = "beacon status"
+	p.show()
+	return nil
 }
 
 // latestTag reads the version from the redirect GitHub serves for
@@ -208,22 +227,27 @@ func guardActiveStreams(force bool) error {
 	return fmt.Errorf("%d stream(s) in use right now; wait, or pass --force to interrupt them", st.Streams)
 }
 
-func restartAfterUpdate() error {
+// restartAfterUpdate returns what happened to the running agent, so the panel
+// can say it rather than leaving the operator to guess.
+func restartAfterUpdate() string {
 	svc, err := serviceStatus()
 	if err == nil && svc.Installed && svc.Running {
+		step("restarting service")
 		if err := serviceStop(); err != nil {
-			return err
+			return "restart failed: " + err.Error()
 		}
 		if err := serviceStart(); err != nil {
-			return err
+			return "restart failed: " + err.Error()
 		}
-		fmt.Println(styDim.Render("  service restarted"))
-		return nil
+		if settled(true).Running {
+			return "service restarted"
+		}
+		return "service did not come back, check its log"
 	}
 
 	if _, _, err := fetchStatus(); err == nil {
-		// an agent is answering but no service owns it: it was started by hand
-		fmt.Println(styDim.Render("  an agent is running in the foreground - restart it to pick this up"))
+		// an agent answers but no service owns it: someone started it by hand
+		return "running in the foreground, restart it yourself"
 	}
-	return nil
+	return "not running"
 }

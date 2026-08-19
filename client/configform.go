@@ -162,15 +162,23 @@ func runConfigForm(r *resolved) error {
 		return err
 	}
 	if !form.saved {
-		fmt.Println(styDim.Render("  cancelled, nothing written"))
+		p := resultPanel("config", markIdle, styDim, "CANCELLED", "nothing written")
+		p.show()
 		return nil
 	}
 
-	path, err := saveConfig(form.result())
+	saved := form.result()
+	path, err := saveConfig(saved)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("  %s written\n", path)
+
+	p := resultPanel("config", markDone, styOK, "SAVED", "")
+	p.kv(keyServer, orNotSet(saved.Server))
+	p.kv(keyID, orNotSet(saved.AgentID))
+	p.kv(keyCA, orNotSet(saved.CAFile))
+	p.footer = path
+	p.show()
 
 	if svc, err := serviceStatus(); err == nil && svc.Running {
 		fmt.Println(styDim.Render("  restart the agent:  beacon restart"))
