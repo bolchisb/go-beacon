@@ -99,6 +99,8 @@ button.copy {
 tr:hover button.copy { opacity: .8; }
 button.copy:hover:enabled { color: var(--accent); opacity: 1; border-color: transparent; }
 button.copy:focus-visible { opacity: 1; }
-button.copy.ok { color: var(--up); opacity: 1; }
-button.copy.bad { color: var(--down); opacity: 1; }
+/* The pointer is still over the button when the result shows, so these have to
+   outrank the hover rule or the outcome is never actually seen. */
+button.copy.ok, button.copy.ok:hover:enabled { color: var(--up); opacity: 1; }
+button.copy.bad, button.copy.bad:hover:enabled { color: var(--down); opacity: 1; }
 button.copy svg { display: block; width: 12px; height: 12px; }
