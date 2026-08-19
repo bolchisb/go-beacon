@@ -19,20 +19,22 @@ import (
 const (
 	dialTimeout      = 10 * time.Second
 	handshakeTimeout = 10 * time.Second
+	pingInterval     = 5 * time.Second
 )
 
 // runSession holds one tunnel open until it dies or the process is stopped.
-func runSession(ctx context.Context, cfg config, hello protocol.Hello, tlsCfg *tls.Config) error {
-	conn, err := dialUpgrade(ctx, cfg, hello, tlsCfg)
+func runSession(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config, st *agentState) error {
+	conn, err := dialUpgrade(ctx, server, hello, tlsCfg)
 	if err != nil {
 		return err
 	}
+	counted := protocol.NewCountingConn(conn)
 
 	ycfg := yamux.DefaultConfig()
 	ycfg.LogOutput = io.Discard
 	// keepalive is left on: it is what notices a NAT that dropped the flow
 	// without ever sending a FIN, which is the common failure on this path
-	sess, err := yamux.Client(conn, ycfg)
+	sess, err := yamux.Client(counted, ycfg)
 	if err != nil {
 		conn.Close()
 		return err
@@ -51,7 +53,10 @@ func runSession(ctx context.Context, cfg config, hello protocol.Hello, tlsCfg *t
 		}
 	}()
 
-	slog.Info("tunnel established", "server", cfg.server, "local", conn.LocalAddr().String())
+	st.connected(sess, counted)
+	go pingLoop(st, sess)
+
+	slog.Info("tunnel established", "server", server, "local", conn.LocalAddr().String())
 
 	for {
 		stream, err := sess.AcceptStream()
@@ -62,16 +67,45 @@ func runSession(ctx context.Context, cfg config, hello protocol.Hello, tlsCfg *t
 	}
 }
 
+// pingLoop keeps a live round-trip figure for `beacon status`. It measures the
+// tunnel, not the socket.
+func pingLoop(st *agentState, sess *yamux.Session) {
+	measure := func() bool {
+		rtt, err := sess.Ping()
+		if err != nil {
+			return false
+		}
+		st.rttNanos.Store(int64(rtt))
+		return true
+	}
+	if !measure() {
+		return
+	}
+
+	t := time.NewTicker(pingInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-sess.CloseChan():
+			return
+		case <-t.C:
+			if !measure() {
+				return
+			}
+		}
+	}
+}
+
 // dialUpgrade performs the HTTP/1.1 upgrade by hand and returns the raw
 // connection underneath it. Going out over HTTP rather than a bare TCP port is
 // what lets the agent reach the relay from a locked-down network.
-func dialUpgrade(ctx context.Context, cfg config, hello protocol.Hello, tlsCfg *tls.Config) (net.Conn, error) {
-	u, err := url.Parse(cfg.server)
+func dialUpgrade(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config) (net.Conn, error) {
+	u, err := url.Parse(server)
 	if err != nil {
 		return nil, err
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("server URL %q has no host", cfg.server)
+		return nil, fmt.Errorf("server URL %q has no host", server)
 	}
 	switch u.Scheme {
 	case "http", "https":
@@ -140,8 +174,8 @@ func upgrade(conn net.Conn, u *url.URL, hello protocol.Hello) (net.Conn, error) 
 	return protocol.WithBuffered(conn, br), nil
 }
 
-// handleStream dispatches one stream opened by the server. SSH, RDP and SFTP
-// become additional cases here.
+// handleStream dispatches one stream opened by the server. Each kind is a
+// self-contained handler; adding a capability means adding a case here.
 func handleStream(stream net.Conn) {
 	defer stream.Close()
 
@@ -157,6 +191,12 @@ func handleStream(stream net.Conn) {
 		if _, err := io.Copy(stream, br); err != nil {
 			slog.Warn("echo failed", "err", err)
 		}
+	case protocol.StreamPTY:
+		handlePTY(stream, br)
+	case protocol.StreamRPC:
+		handleRPC(stream, br)
+	case protocol.StreamForward:
+		handleForward(stream, br)
 	default:
 		slog.Warn("stream: unsupported kind", "kind", kind)
 	}

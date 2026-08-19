@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -11,33 +10,13 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// countingConn tracks how many bytes crossed the tunnel, so the dashboard can
-// show real traffic instead of just "socket is open".
-type countingConn struct {
-	net.Conn
-	in  atomic.Uint64
-	out atomic.Uint64
-}
-
-func (c *countingConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
-	c.in.Add(uint64(n))
-	return n, err
-}
-
-func (c *countingConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
-	c.out.Add(uint64(n))
-	return n, err
-}
-
 // agentRec is the server-side record of one agent. Records survive
 // disconnection so the UI can show who dropped and how often they flap.
 type agentRec struct {
 	hello      protocol.Hello
 	remoteAddr string
 	session    *yamux.Session
-	conn       *countingConn
+	conn       *protocol.CountingConn
 
 	online     bool
 	since      time.Time // when the current online/offline state began
@@ -75,7 +54,7 @@ func newRegistry() *Registry {
 // Connect registers a freshly established session. If the agent id is already
 // online the previous session is closed: last connection wins, which is what
 // you want when a client reconnects before the old socket has timed out.
-func (r *Registry) Connect(h protocol.Hello, remoteAddr string, sess *yamux.Session, conn *countingConn) (rec *agentRec, reconnect bool) {
+func (r *Registry) Connect(h protocol.Hello, remoteAddr string, sess *yamux.Session, conn *protocol.CountingConn) (rec *agentRec, reconnect bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -154,8 +133,8 @@ func (r *Registry) Snapshot() []AgentView {
 		}
 		if rec.online {
 			v.Streams = rec.session.NumStreams()
-			v.BytesIn = rec.conn.in.Load()
-			v.BytesOut = rec.conn.out.Load()
+			v.BytesIn = rec.conn.In()
+			v.BytesOut = rec.conn.Out()
 			if ns := rec.rttNanos.Load(); ns >= 0 {
 				ms := float64(ns) / float64(time.Millisecond)
 				v.RTTms = &ms

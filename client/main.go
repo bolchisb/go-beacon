@@ -1,162 +1,130 @@
-// Command beacon-agent is the outbound-only side of the relay: it dials the
-// control plane, keeps a single multiplexed tunnel alive and serves whatever
-// the server opens on it. It is pure Go with no build tags, so one set of
-// sources covers windows, linux and darwin on amd64 and arm64.
+// Command beacon is the agent side of the relay: it holds one outbound tunnel
+// open to the control plane and serves whatever the server opens on it. It is
+// pure Go, so one set of sources covers windows, linux and darwin on amd64 and
+// arm64; only service registration differs per platform.
 package main
 
 import (
-	"context"
-	"crypto/tls"
-	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"os"
-	"os/signal"
-	"runtime"
 	"strings"
-	"syscall"
-	"time"
-
-	"github.com/bolchisb/go-beacon/internal/protocol"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const (
-	minBackoff = time.Second
-	maxBackoff = 30 * time.Second
-	// a session that lasted this long counts as healthy, so the next failure
-	// starts backing off from scratch instead of from the previous ceiling
-	healthySession = 30 * time.Second
-)
-
-type config struct {
-	server string
-	id     string
-	caFile string
-}
-
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	cfg, showVersion := parseFlags()
-	if showVersion {
-		fmt.Println(version)
+	// launched by the windows Service Control Manager there is no command line
+	// to read, so this has to come first
+	if handled, err := runUnderServiceManager(); handled {
+		if err != nil {
+			fail("service", err)
+		}
 		return
 	}
 
-	tlsCfg, err := tlsConfig(cfg.caFile)
+	args := os.Args[1:]
+	if len(args) == 0 {
+		printHelp()
+		return
+	}
+
+	cmd, rest := args[0], args[1:]
+	var err error
+	switch cmd {
+	case "run":
+		err = cmdRun(rest)
+	case "status":
+		err = cmdStatus(rest)
+	case "config":
+		err = cmdConfig(rest)
+	case "install":
+		err = cmdInstall(rest)
+	case "uninstall":
+		err = cmdUninstall(rest)
+	case "forward":
+		err = cmdForward(rest)
+	case "update":
+		err = cmdUpdate(rest)
+	case "start", "stop", "restart":
+		err = cmdServiceControl(cmd, rest)
+	case "version", "--version", "-v":
+		fmt.Println(version)
+	case "help", "--help", "-h":
+		printHelp()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
+		printHelp()
+		os.Exit(2)
+	}
 	if err != nil {
-		slog.Error("tls setup failed", "err", err)
-		os.Exit(1)
-	}
-
-	hostname, _ := os.Hostname()
-	hello := protocol.Hello{
-		AgentID:  cfg.id,
-		Hostname: hostname,
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		Version:  version,
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	slog.Info("agent starting", "id", hello.AgentID, "server", cfg.server,
-		"platform", hello.OS+"/"+hello.Arch, "version", version)
-
-	supervise(ctx, cfg, hello, tlsCfg)
-	slog.Info("agent stopped")
-}
-
-// supervise keeps exactly one session alive, forever. An agent that gives up
-// would need someone to log into the machine to restart it, which is the one
-// thing the relay exists to avoid.
-func supervise(ctx context.Context, cfg config, hello protocol.Hello, tlsCfg *tls.Config) {
-	backoff := minBackoff
-
-	for ctx.Err() == nil {
-		start := time.Now()
-		err := runSession(ctx, cfg, hello, tlsCfg)
-		if ctx.Err() != nil {
-			return
-		}
-		if err != nil {
-			slog.Warn("session ended", "err", err)
-		}
-		if time.Since(start) >= healthySession {
-			backoff = minBackoff
-		}
-
-		delay := jitter(backoff)
-		slog.Info("reconnecting", "in", delay.Round(time.Millisecond))
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(delay):
-		}
-
-		if backoff < maxBackoff {
-			backoff = min(backoff*2, maxBackoff)
-		}
+		fail(cmd, err)
 	}
 }
 
-// jitter spreads reconnects over 50-100% of the backoff window. Without it a
-// relay restart brings every agent back in the same millisecond.
-func jitter(d time.Duration) time.Duration {
-	return time.Duration(float64(d) * (0.5 + rand.Float64()/2))
+// fail reports through the same panel as every other outcome, unless the
+// command already rendered its own explanation.
+func fail(command string, err error) {
+	if !errors.Is(err, errSilent) {
+		fmt.Fprint(os.Stderr, errorPanel(command, err))
+	}
+	os.Exit(1)
 }
 
-func parseFlags() (config, bool) {
-	hostname, _ := os.Hostname()
+type command struct{ name, summary string }
 
-	var cfg config
-	var showVersion bool
-	flag.StringVar(&cfg.server, "server", env("BEACON_SERVER", "http://127.0.0.1:8080"),
-		"relay URL, http:// or https://")
-	flag.StringVar(&cfg.id, "id", env("BEACON_AGENT_ID", hostname),
-		"agent identity shown in the dashboard")
-	flag.StringVar(&cfg.caFile, "ca-file", env("BEACON_CA_FILE", ""),
-		"PEM bundle trusted in addition to the system roots (https only)")
-	flag.BoolVar(&showVersion, "version", false, "print version and exit")
-	flag.Parse()
-
-	return cfg, showVersion
+var commands = []command{
+	{"status", "show whether the agent is connected"},
+	{"run", "run the agent in the foreground"},
+	{"install", "install the agent as a system service"},
+	{"forward", "open a local port that leads to a service on a machine"},
+	{"update", "replace this binary with the latest release"},
+	{"uninstall", "remove the service and the installed binary"},
+	{"start", "start the installed service"},
+	{"stop", "stop the installed service"},
+	{"restart", "stop then start the installed service"},
+	{"config", "show settings and where each value came from"},
+	{"version", "print the version"},
+	{"help", "show this text"},
 }
 
-// tlsConfig trusts the system roots, plus an internal CA when one is given.
-// Phase 2 adds the client certificate to this same config.
-func tlsConfig(caFile string) (*tls.Config, error) {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if caFile == "" {
-		return cfg, nil
+func printHelp() {
+	var b strings.Builder
+	b.WriteString(styTitle.Render("beacon") + styDim.Render(" "+version) + "\n")
+	b.WriteString(styDim.Render("outbound agent for the go-beacon relay") + "\n\n")
+	b.WriteString(styLabel.Render("USAGE") + "\n  beacon <command> [flags]\n\n")
+	b.WriteString(styLabel.Render("COMMANDS") + "\n")
+	for _, c := range commands {
+		b.WriteString("  " + styValue.Render(fixed(c.name, 11)) + styDim.Render(c.summary) + "\n")
 	}
-
-	pem, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, err
-	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		// windows and darwin can both refuse to export the system pool; an
-		// explicit CA file is still usable on its own
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("no certificate found in %s", caFile)
-	}
-	cfg.RootCAs = pool
-	return cfg, nil
+	b.WriteString("\n" + styLabel.Render("EXAMPLES") + "\n")
+	b.WriteString(styDim.Render("  beacon install --server https://relay.example.com --id build-01") + "\n")
+	b.WriteString(styDim.Render("  beacon status") + "\n")
+	b.WriteString(styDim.Render("  beacon forward mm01ops rdp --listen 127.0.0.1:3390") + "\n")
+	b.WriteString(styDim.Render("  beacon config set server=https://relay.example.com") + "\n")
+	b.WriteString("\n" + styLabel.Render("ENVIRONMENT") + "\n")
+	b.WriteString(styDim.Render("  BEACON_SERVER, BEACON_AGENT_ID, BEACON_CA_FILE") + "\n")
+	b.WriteString(styDim.Render("  BEACON_CONFIG, BEACON_SOCKET   override file locations") + "\n")
+	fmt.Print(b.String())
 }
 
-func env(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
+// usageFor keeps every subcommand's -h looking the same.
+func usageFor(fs *flag.FlagSet, use, summary string) {
+	fmt.Fprintln(os.Stderr, styTitle.Render(use))
+	fmt.Fprintln(os.Stderr, styDim.Render(summary))
+	if hasFlags(fs) {
+		fmt.Fprintln(os.Stderr, "\n"+styLabel.Render("FLAGS"))
+		fs.PrintDefaults()
 	}
-	return def
+}
+
+func hasFlags(fs *flag.FlagSet) bool {
+	found := false
+	fs.VisitAll(func(*flag.Flag) { found = true })
+	return found
 }

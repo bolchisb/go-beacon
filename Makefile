@@ -16,7 +16,9 @@ GO_RUN = podman run --rm \
 # linux container.
 PLATFORMS ?= windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: up down logs tidy vet build client clean
+GH_REPO ?= bolchisb/go-beacon
+
+.PHONY: up down logs tidy vet test build client release clean
 
 ## up: build and start the relay
 up:
@@ -36,21 +38,54 @@ tidy:
 vet:
 	$(GO_RUN) sh -c "go vet ./... && gofmt -l ."
 
+test:
+	$(GO_RUN) go test ./...
+
 build:
 	$(COMPOSE) build
 
 ## client: cross-compile the agent for every supported platform into dist/
 client:
-	$(GO_RUN) sh -c 'set -e; \
+	@$(GO_RUN) sh -c 'set -e; \
 	for p in $(PLATFORMS); do \
 	  os=$${p%/*}; arch=$${p#*/}; ext=""; \
 	  if [ "$$os" = windows ]; then ext=".exe"; fi; \
 	  echo "building $$os/$$arch"; \
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath \
-	    -ldflags "-s -w -X main.version=$(VERSION)" \
-	    -o dist/beacon-agent-$$os-$$arch$$ext ./client; \
+	    -ldflags "-s -w -X main.version=$(VERSION) -X main.updateRepo=$(GH_REPO)" \
+	    -o dist/beacon-$$os-$$arch$$ext ./client; \
 	done'
 	@ls -lh dist/
+
+## release: build and publish the binaries to a GitHub release
+##   make release TAG=v0.1.0
+##   make release TAG=dev-07 PLATFORMS=linux/amd64      one platform, fast loop
+##   make release TAG=v0.1.0 DRY=1                      print, publish nothing
+release:
+	@test -n "$(TAG)" || { \
+	  echo "TAG is required:  make release TAG=v0.1.0 [PLATFORMS=linux/amd64] [DRY=1]"; exit 1; }
+	@if [ -z "$(ALLOW_DIRTY)" ] && ! git diff --quiet HEAD; then \
+	  echo "working tree is dirty - the binary would not match the tag."; \
+	  echo "commit first, or pass ALLOW_DIRTY=1 if you know what you are doing."; exit 1; fi
+	@git fetch -q origin
+	@git branch -r --contains HEAD 2>/dev/null | grep -q . || { \
+	  echo "HEAD is not on any remote branch - push before releasing,"; \
+	  echo "otherwise the release would point at a commit GitHub cannot see."; exit 1; }
+	@rm -rf dist
+	@$(MAKE) --no-print-directory client VERSION=$(TAG)
+	@$(GO_RUN) sh -c 'cd dist && sha256sum beacon-* > SHA256SUMS'
+	@set -e; \
+	RUN='$(if $(DRY),echo [dry],)'; \
+	SHA=$$(git rev-parse HEAD); \
+	if gh release view "$(TAG)" --repo $(GH_REPO) >/dev/null 2>&1; then \
+	  echo "release $(TAG) exists, replacing its assets"; \
+	  $$RUN gh release upload "$(TAG)" dist/* --repo $(GH_REPO) --clobber; \
+	else \
+	  $$RUN gh release create "$(TAG)" dist/* --repo $(GH_REPO) \
+	    --target "$$SHA" --title "$(TAG)" \
+	    --notes "commit $$SHA"$(if $(findstring dev,$(TAG)), --prerelease,); \
+	fi
+	@echo; echo "https://github.com/$(GH_REPO)/releases/tag/$(TAG)"
 
 clean:
 	rm -rf dist
