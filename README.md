@@ -103,6 +103,16 @@ That registers it as a system service and starts it. Other commands:
 | `beacon start` / `stop` / `restart` | Control the installed service |
 | `beacon uninstall` | Remove the service and the binary |
 
+An agent's warnings and errors are sent to the relay and appear in the
+dashboard's event feed, which is usually where you want them: a machine you
+cannot log into is exactly the one whose log you cannot read. Everything below
+warning stays local — the relay already records sessions opening and closing.
+
+The full local log is still there if you need it: the journal on Linux
+(`journalctl -u beacon`), `/var/log/beacon.log` on macOS, and
+`%ProgramData%\beacon\beacon.log` on Windows, where a service has no stdout to
+inherit at all.
+
 Settings resolve from defaults, then the config file, then the environment, then
 flags — later wins.
 

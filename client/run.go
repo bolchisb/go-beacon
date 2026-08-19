@@ -25,6 +25,10 @@ const (
 	healthySession = 30 * time.Second
 )
 
+// shipper forwards agent warnings to the relay so they show up in the
+// dashboard. It is package level because the logger is.
+var shipper *logHandler
+
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("beacon run", flag.ExitOnError)
 	fs.String(keyServer, "", "relay URL, http:// or https://")
@@ -71,6 +75,11 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 		configPath = cfg.path
 	}
 	st := newAgentState(cfg.AgentID, cfg.Server, configPath)
+
+	// from here the agent's own warnings reach the dashboard, which is the only
+	// place an operator can see them on a machine they cannot log into
+	shipper = newLogHandler(slog.Default().Handler())
+	slog.SetDefault(slog.New(shipper))
 
 	sock, sockErr := serveControl(ctx, st)
 	if sockErr != nil {

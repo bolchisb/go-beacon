@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -57,14 +58,20 @@ func handleForward(stream net.Conn, br *bufio.Reader) {
 
 	addr, ok := services[service]
 	if !ok {
-		// hanging up is the refusal; there is no reply channel on a raw stream
 		slog.Warn("forward: service not offered", "service", service)
+		protocol.WriteForwardStatus(stream, fmt.Errorf("this agent does not offer %q", service))
 		return
 	}
 
 	local, err := net.DialTimeout("tcp", addr, forwardDialTimeout)
 	if err != nil {
 		slog.Warn("forward: cannot reach the local service", "service", service, "addr", addr, "err", err)
+		// say why, or the operator sees a session that opened and closed
+		protocol.WriteForwardStatus(stream, fmt.Errorf("%s is not answering on %s: %w", service, addr, err))
+		return
+	}
+	if err := protocol.WriteForwardStatus(stream, nil); err != nil {
+		local.Close()
 		return
 	}
 
