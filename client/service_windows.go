@@ -5,6 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,7 +29,36 @@ func runUnderServiceManager() (bool, error) {
 	if err != nil || !isService {
 		return false, err
 	}
+
+	// A windows service has nowhere to write: systemd captures stdout on linux
+	// and launchd redirects it on darwin, but here it is discarded. Without a
+	// file, the only way to learn why the agent refused a connection is to
+	// guess.
+	if f, err := openServiceLog(); err == nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	}
+
 	return true, svc.Run(winServiceName, &windowsService{})
+}
+
+// maxServiceLogBytes bounds the log. It is checked once, at startup, which is
+// enough for a process that logs a line per session and restarts on update.
+const maxServiceLogBytes = 5 << 20
+
+func serviceLogPath() string {
+	return filepath.Join(filepath.Dir(configPath()), "beacon.log")
+}
+
+func openServiceLog() (*os.File, error) {
+	path := serviceLogPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	if info, err := os.Stat(path); err == nil && info.Size() > maxServiceLogBytes {
+		os.Remove(path + ".1")
+		os.Rename(path, path+".1")
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 }
 
 type windowsService struct{}
@@ -84,6 +116,7 @@ func installPlan(cfg *resolved, target string) string {
 	fmt.Fprintf(&b, "would copy     %s\n", target)
 	fmt.Fprintf(&b, "would write    %s\n", configPath())
 	fmt.Fprintf(&b, "would register service %q (%s)\n", winServiceName, winDisplayName)
+	fmt.Fprintf(&b, "would log to   %s\n", serviceLogPath())
 	fmt.Fprintf(&b, "               start type automatic, restart after 5s on failure\n")
 	fmt.Fprintf(&b, "               command: %s run\n", target)
 	fmt.Fprintf(&b, "\nrelay          %s\nagent id       %s\n", cfg.Server, cfg.AgentID)

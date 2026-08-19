@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -31,6 +32,44 @@ func WriteForwardTarget(w io.Writer, service string) error {
 	}
 	_, err := io.WriteString(w, service+"\n")
 	return err
+}
+
+// A forward stream carries one status line back before it turns into a raw
+// pipe. Without it a refusal is indistinguishable from a service that accepted
+// and hung up, and the operator is left guessing at the other end of a tunnel
+// they cannot see into.
+const (
+	forwardOK       = "ok"
+	forwardMaxError = 512
+)
+
+// WriteForwardStatus reports whether the agent reached the service.
+func WriteForwardStatus(w io.Writer, cause error) error {
+	if cause == nil {
+		_, err := io.WriteString(w, forwardOK+"\n")
+		return err
+	}
+	msg := strings.ReplaceAll(cause.Error(), "\n", " ")
+	if len(msg) > forwardMaxError {
+		msg = msg[:forwardMaxError]
+	}
+	_, err := io.WriteString(w, "error "+msg+"\n")
+	return err
+}
+
+// ReadForwardStatus reads the line written by WriteForwardStatus. Anything
+// buffered past it belongs to the connection and must be preserved by the
+// caller, which is what WithBuffered is for.
+func ReadForwardStatus(r *bufio.Reader) error {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("the agent closed the stream without answering: %w", err)
+	}
+	line = strings.TrimSpace(line)
+	if line == forwardOK {
+		return nil
+	}
+	return errors.New(strings.TrimSpace(strings.TrimPrefix(line, "error")))
 }
 
 // ReadForwardTarget reads the service name written by WriteForwardTarget.

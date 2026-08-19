@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -116,14 +117,7 @@ func (s *Server) serveSession(h protocol.Hello, remote string, sess *yamux.Sessi
 		if err != nil {
 			break
 		}
-		// Phase 1 has no agent-initiated services yet; log it and hang up so a
-		// buggy client cannot leak streams.
-		s.events.Publish(Event{
-			Type:    "stream",
-			AgentID: h.AgentID,
-			Message: fmt.Sprintf("agent opened stream %d (no handler yet)", stream.StreamID()),
-		})
-		stream.Close()
+		go s.handleAgentStream(h.AgentID, stream)
 	}
 
 	sess.Close()
@@ -131,6 +125,55 @@ func (s *Server) serveSession(h protocol.Hello, remote string, sess *yamux.Sessi
 		slog.Info("agent offline", "agent", h.AgentID)
 		s.events.Publish(Event{Type: "disconnected", AgentID: h.AgentID, Message: "session closed"})
 	}
+}
+
+// handleAgentStream serves a stream the agent opened. The relay is the only
+// place an operator can see an agent's own warnings, so it reads them here
+// rather than hanging up.
+func (s *Server) handleAgentStream(agentID string, stream net.Conn) {
+	defer stream.Close()
+
+	br := bufio.NewReader(stream)
+	kind, err := protocol.ReadStreamHeader(br)
+	if err != nil {
+		return
+	}
+
+	switch kind {
+	case protocol.StreamLog:
+		s.consumeAgentLog(agentID, br)
+	default:
+		s.events.Publish(Event{
+			Type:    "stream",
+			AgentID: agentID,
+			Message: fmt.Sprintf("agent opened an unknown stream %q", kind),
+		})
+	}
+}
+
+// consumeAgentLog turns the agent's warnings into dashboard events. Only
+// warnings and errors are sent, so this cannot drown the feed.
+func (s *Server) consumeAgentLog(agentID string, br *bufio.Reader) {
+	dec := json.NewDecoder(br)
+	for {
+		var line protocol.LogLine
+		if err := dec.Decode(&line); err != nil {
+			return
+		}
+		s.events.Publish(Event{
+			Type:    eventTypeForLevel(line.Level),
+			AgentID: agentID,
+			Message: line.Text(),
+			At:      line.Time,
+		})
+	}
+}
+
+func eventTypeForLevel(level string) string {
+	if strings.HasPrefix(level, "ERROR") {
+		return "error"
+	}
+	return "warn"
 }
 
 // pingLoop keeps a live RTT figure per agent. It also proves the tunnel is

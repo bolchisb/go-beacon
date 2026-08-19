@@ -56,6 +56,15 @@ func runSession(ctx context.Context, server string, hello protocol.Hello, tlsCfg
 	st.connected(sess, counted)
 	go pingLoop(st, sess)
 
+	if logStream, err := sess.OpenStream(); err == nil {
+		if protocol.WriteStreamHeader(logStream, protocol.StreamLog) == nil && shipper != nil {
+			shipper.attach(logStream)
+			defer func() { shipper.detach(logStream); logStream.Close() }()
+		} else {
+			logStream.Close()
+		}
+	}
+
 	slog.Info("tunnel established", "server", server, "local", conn.LocalAddr().String())
 
 	for {

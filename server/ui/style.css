@@ -7,6 +7,7 @@
   --up: #3fb950;
   --down: #f85149;
   --accent: #58a6ff;
+  --warn: #d29922;
 }
 
 * { box-sizing: border-box; }
@@ -78,7 +79,9 @@ button:disabled { opacity: .35; cursor: default; }
 #events .ts { color: var(--muted); margin-right: .6rem; }
 #events .who { color: var(--accent); margin-right: .6rem; }
 #events .connected { color: var(--up); }
-#events .disconnected, #events .kick { color: var(--down); }
+#events .disconnected, #events .kick, #events .error { color: var(--down); }
+/* an agent's own warnings: the reason a session refused to open */
+#events .warn { color: var(--warn, #d29922); }
 
 /* Copy buttons sit inside a cell, so they opt out of the framed button style
    used for actions. They stay dim until the row is hovered: visible enough to

@@ -68,8 +68,12 @@ func TestForwardCarriesBytesArrivingWithTheTargetLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	rd := bufio.NewReader(relay)
+	if err := protocol.ReadForwardStatus(rd); err != nil {
+		t.Fatalf("agent refused: %v", err)
+	}
 	got := make([]byte, 5)
-	if _, err := io.ReadFull(relay, got); err != nil {
+	if _, err := io.ReadFull(rd, got); err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "HELLO" {
@@ -88,12 +92,16 @@ func TestForwardCarriesBytesSentAfterTheTargetLine(t *testing.T) {
 	if _, err := relay.Write([]byte("svc\n")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := relay.Write([]byte("second")); err != nil {
-		t.Fatal(err)
-	}
+	// net.Pipe is synchronous, so this write has to run alongside the read
+	// below; on a real stream both sides are buffered
+	go relay.Write([]byte("second"))
 
+	rd := bufio.NewReader(relay)
+	if err := protocol.ReadForwardStatus(rd); err != nil {
+		t.Fatalf("agent refused: %v", err)
+	}
 	got := make([]byte, 6)
-	if _, err := io.ReadFull(relay, got); err != nil {
+	if _, err := io.ReadFull(rd, got); err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "SECOND" {
@@ -114,8 +122,39 @@ func TestForwardRefusesAServiceItDoesNotOffer(t *testing.T) {
 	if _, err := relay.Write([]byte("something-else\n")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := relay.Read(make([]byte, 1)); err == nil {
-		t.Fatal("the stream should have been closed, not answered")
+	// the refusal must arrive as a reason, not as a silent hang-up
+	err := protocol.ReadForwardStatus(bufio.NewReader(relay))
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if !strings.Contains(err.Error(), "something-else") {
+		t.Fatalf("the refusal should name the service, got %q", err)
+	}
+}
+
+// A service that is configured but not listening is the common failure: the
+// operator must learn why rather than watch a session open and close.
+func TestForwardReportsWhyTheLocalServiceIsUnreachable(t *testing.T) {
+	// port 1 on loopback: nothing listens there
+	withForwardService(t, "rdp", "127.0.0.1:1")
+
+	relay, agent := net.Pipe()
+	defer relay.Close()
+	go func() { defer agent.Close(); handleForward(agent, bufio.NewReader(agent)) }()
+
+	relay.SetDeadline(time.Now().Add(15 * time.Second))
+	if _, err := relay.Write([]byte("rdp\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := protocol.ReadForwardStatus(bufio.NewReader(relay))
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, want := range []string{"rdp", "127.0.0.1:1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the reason should mention %s, got %q", want, err)
+		}
 	}
 }
 

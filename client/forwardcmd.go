@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"flag"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/bolchisb/go-beacon/internal/protocol"
 	"github.com/coder/websocket"
 )
 
@@ -105,8 +107,18 @@ func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Conf
 	}
 	defer c.CloseNow()
 
-	slog.Info("forward: session open", "from", local.RemoteAddr().String())
 	remote := websocket.NetConn(ctx, c, websocket.MessageBinary)
+
+	// the agent answers before any traffic flows, so a refusal arrives as a
+	// reason rather than as a session that opened and closed
+	br := bufio.NewReader(remote)
+	if err := protocol.ReadForwardStatus(br); err != nil {
+		slog.Warn("forward: the agent refused", "err", err)
+		return
+	}
+	remote = protocol.WithBuffered(remote, br)
+
+	slog.Info("forward: session open", "from", local.RemoteAddr().String())
 
 	var once sync.Once
 	shut := func() { once.Do(func() { local.Close(); c.CloseNow() }) }
