@@ -21,6 +21,7 @@ const StreamForward = "forward"
 // own configuration, not the caller's business.
 const (
 	ServiceRDP = "rdp"
+	ServiceSSH = "ssh"
 )
 
 // WriteForwardTarget names the service on a freshly opened forward stream.

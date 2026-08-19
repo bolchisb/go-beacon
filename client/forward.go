@@ -25,6 +25,10 @@ var services = defaultServices()
 func defaultServices() map[string]string {
 	return map[string]string{
 		protocol.ServiceRDP: "127.0.0.1:3389",
+		// ssh is on by default because it widens nothing: the relay already
+		// hands out a terminal on this machine, and that one asks for no
+		// credentials at all. Forwarding to sshd is the stricter of the two.
+		protocol.ServiceSSH: "127.0.0.1:22",
 	}
 }
 

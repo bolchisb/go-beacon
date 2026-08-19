@@ -56,10 +56,10 @@ function buildRow(a) {
 
   tr.append(
     state,
-    cell(a.id),
-    cell(a.hostname || '—'),
+    copyCell(a.id),
+    copyCell(a.hostname),
     cell(a.os && a.arch ? `${a.os}/${a.arch}` : '—'),
-    cell(a.online ? a.remote_addr : '—'),
+    copyCell(a.online ? a.remote_addr : ''),
     cell(humanDuration(a.since_seconds)),
     cell(a.rtt_ms == null ? '—' : `${a.rtt_ms.toFixed(1)} ms`, 'num'),
     cell(a.online ? a.streams : '—', 'num'),
@@ -79,6 +79,71 @@ function buildRow(a) {
   );
   tr.append(actions);
   return tr;
+}
+
+const COPY_ICON =
+  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">' +
+  '<rect x="5.75" y="5.75" width="8.5" height="8.5" rx="1.5"/>' +
+  '<path d="M10.25 3.25v-.5a1.5 1.5 0 0 0-1.5-1.5h-5a1.5 1.5 0 0 0-1.5 1.5v5a1.5 1.5 0 0 0 1.5 1.5h.5"/></svg>';
+
+const CHECK_ICON =
+  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">' +
+  '<path d="M3 8.5 6.5 12 13 4.5"/></svg>';
+
+// The dashboard is normally reached over plain HTTP on a private address, which
+// is not a secure context, so navigator.clipboard does not exist there. The
+// textarea fallback is what actually runs on the deployment we ship; the modern
+// path is kept for when the relay sits behind TLS.
+async function copyText(text) {
+  if (window.isSecureContext && navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.top = '-1000px';
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand('copy');
+  ta.remove();
+  if (!ok) throw new Error('copy rejected');
+}
+
+// copyCell renders a value with a copy button beside it. An empty value gets a
+// dash and no button: there is nothing to put on the clipboard.
+function copyCell(text) {
+  const td = document.createElement('td');
+  if (!text) {
+    td.textContent = '—';
+    return td;
+  }
+  td.className = 'copyable';
+
+  const label = document.createElement('span');
+  label.textContent = text;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'copy';
+  btn.title = `Copy ${text}`;
+  btn.setAttribute('aria-label', `Copy ${text}`);
+  btn.innerHTML = COPY_ICON;
+
+  btn.addEventListener('click', async () => {
+    try {
+      await copyText(text);
+      btn.className = 'copy ok';
+      btn.innerHTML = CHECK_ICON;
+    } catch {
+      btn.className = 'copy bad';
+    }
+    setTimeout(() => { btn.className = 'copy'; btn.innerHTML = COPY_ICON; }, 1200);
+  });
+
+  td.append(label, btn);
+  return td;
 }
 
 // The terminal opens in its own tab, so it deliberately skips actionButton's

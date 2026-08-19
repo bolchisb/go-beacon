@@ -46,7 +46,7 @@ func upperEchoServer(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func withService(t *testing.T, name, addr string) {
+func withForwardService(t *testing.T, name, addr string) {
 	t.Helper()
 	previous := services
 	services = map[string]string{name: addr}
@@ -57,7 +57,7 @@ func withService(t *testing.T, name, addr string) {
 // the same packet. Reading the socket instead of the buffered reader would
 // swallow those bytes, so the test writes them together on purpose.
 func TestForwardCarriesBytesArrivingWithTheTargetLine(t *testing.T) {
-	withService(t, "svc", upperEchoServer(t))
+	withForwardService(t, "svc", upperEchoServer(t))
 
 	relay, agent := net.Pipe()
 	defer relay.Close()
@@ -78,7 +78,7 @@ func TestForwardCarriesBytesArrivingWithTheTargetLine(t *testing.T) {
 }
 
 func TestForwardCarriesBytesSentAfterTheTargetLine(t *testing.T) {
-	withService(t, "svc", upperEchoServer(t))
+	withForwardService(t, "svc", upperEchoServer(t))
 
 	relay, agent := net.Pipe()
 	defer relay.Close()
@@ -104,7 +104,7 @@ func TestForwardCarriesBytesSentAfterTheTargetLine(t *testing.T) {
 // An agent must not dial anything it was not configured to offer, otherwise it
 // is a route into the network behind it.
 func TestForwardRefusesAServiceItDoesNotOffer(t *testing.T) {
-	withService(t, "svc", upperEchoServer(t))
+	withForwardService(t, "svc", upperEchoServer(t))
 
 	relay, agent := net.Pipe()
 	defer relay.Close()
@@ -126,6 +126,9 @@ func TestSetServicesMergesOverDefaultsAndCanWithdraw(t *testing.T) {
 	setServices(map[string]string{"vnc": "127.0.0.1:5900"})
 	if services[protocol.ServiceRDP] != "127.0.0.1:3389" {
 		t.Fatalf("the rdp default should survive, got %q", services[protocol.ServiceRDP])
+	}
+	if services[protocol.ServiceSSH] != "127.0.0.1:22" {
+		t.Fatalf("the ssh default should survive, got %q", services[protocol.ServiceSSH])
 	}
 	if services["vnc"] != "127.0.0.1:5900" {
 		t.Fatal("a configured service should be added")
