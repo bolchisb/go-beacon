@@ -42,11 +42,10 @@ there, the same tunnel is the debugging channel.
 | --- | --- | --- |
 | Relay tunnel | Multiplexed, outbound-only agent sessions | Available |
 | Dashboard & API | Agent inventory, connectivity test, live event stream | Available |
-| Web terminal | Full interactive shell in a browser tab, one click from the dashboard | Available (Linux, macOS) |
+| Web terminal | Full interactive shell in a browser tab, one click from the dashboard | Available |
 | MCP bridge | Commands, files and clipboard on a target, driven by an AI assistant | Available |
 | Port forwarding | A local port that leads to a service on the target: ssh, remote desktop, or anything else it hosts | Available |
 | Clipboard | Read and replace the target's clipboard | Available (Windows, macOS) |
-| Windows terminal | The same shell on Windows targets, over ConPTY | Planned |
 | mTLS | Mutual TLS between agent and relay, internal CA | Deferred |
 
 ## Running the relay
@@ -98,6 +97,7 @@ That registers it as a system service and starts it. Other commands:
 | `beacon run` | Run in the foreground instead of as a service |
 | `beacon status` | Show whether the agent is connected, and its round-trip time |
 | `beacon config` | Show every setting and where its value came from |
+| `beacon ssh` | Open a terminal on a machine, in this terminal |
 | `beacon forward` | Open a local port that leads to a service on a remote machine |
 | `beacon update` | Replace the binary with the latest release |
 | `beacon start` / `stop` / `restart` | Control the installed service |
@@ -154,7 +154,8 @@ Start here if you are not sure which one you want:
 | You want to | Use | Needs the binary locally |
 | --- | --- | --- |
 | Look at something quickly | the browser terminal | no |
-| Actually work: `scp`, `rsync`, ssh config | `beacon forward … ssh` | yes |
+| A shell in your own terminal | `beacon ssh` | yes |
+| `scp`, `rsync`, ssh config | `beacon forward … ssh` | yes |
 | A desktop | `beacon forward … rdp` | yes |
 | Let an assistant do it | the MCP endpoint | no |
 
@@ -162,9 +163,21 @@ Start here if you are not sure which one you want:
 with a real terminal on that machine — a genuine pseudo-terminal, so full-screen
 programs, colours and window resizing all behave.
 
-**A real ssh client.** The browser terminal is the quick way in, but `scp`,
-`rsync`, `~/.ssh/config` and agent forwarding all need the real client. Open the
-port in one terminal and leave it running:
+The same terminal, without the browser:
+
+```sh
+beacon ssh build-vm-01
+```
+
+It carries the same stream the dashboard uses and lands in a shell the same way,
+with no password in between: the relay is the authority here, not the target's
+account database. That is also its limit — it is not the ssh protocol, so it
+cannot carry `scp` or `rsync`. For those, forward the target's own sshd.
+
+**A real ssh client.** `beacon ssh` gives you a shell, but `scp`, `rsync`,
+`~/.ssh/config` and agent forwarding all need the real client, which means the
+target's own sshd and its own credentials. Open the port in one terminal and
+leave it running:
 
 ```sh
 beacon forward build-vm-01 ssh --listen 127.0.0.1:2222
@@ -179,8 +192,13 @@ rsync -e 'ssh -p 2222' -av ./src/ you@127.0.0.1:/opt/app/
 ```
 
 The target's own sshd authenticates, with the accounts and keys that machine
-already has. Nothing about your ssh client changes: it talks to a local port,
-and the bytes leave over 443.
+already has, so this one **does** ask for a password unless your key is already
+in its `authorized_keys`. Nothing about your ssh client changes: it talks to a
+local port, and the bytes leave over 443.
+
+Note the lower-case `-p`. `ssh -P` is silently ignored and connects to port 22
+on your own machine instead, which looks like the tunnel asking for a password
+when it is really your laptop.
 
 For something you use daily, name it once in `~/.ssh/config`:
 

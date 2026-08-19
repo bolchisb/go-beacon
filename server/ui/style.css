@@ -79,3 +79,26 @@ button:disabled { opacity: .35; cursor: default; }
 #events .who { color: var(--accent); margin-right: .6rem; }
 #events .connected { color: var(--up); }
 #events .disconnected, #events .kick { color: var(--down); }
+
+/* Copy buttons sit inside a cell, so they opt out of the framed button style
+   used for actions. They stay dim until the row is hovered: visible enough to
+   discover, quiet enough not to compete with the values themselves. */
+td.copyable { white-space: nowrap; }
+
+button.copy {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin-left: .45rem;
+  color: var(--muted);
+  opacity: .35;
+  vertical-align: -2px;
+  transition: opacity .12s, color .12s;
+}
+
+tr:hover button.copy { opacity: .8; }
+button.copy:hover:enabled { color: var(--accent); opacity: 1; border-color: transparent; }
+button.copy:focus-visible { opacity: 1; }
+button.copy.ok { color: var(--up); opacity: 1; }
+button.copy.bad { color: var(--down); opacity: 1; }
+button.copy svg { display: block; width: 12px; height: 12px; }
