@@ -1,0 +1,71 @@
+# Two entry points only: a merge into develop, and a tag cut on main.
+# Everything else (pull requests, feature branches, tags off other branches)
+# leaves without building.
+name: server image
+
+on:
+  push:
+    branches:
+      - develop
+    tags:
+      - '*'
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}-server
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # full history so the tag gate below can walk back to origin/main
+          fetch-depth: 0
+
+      # A tag push carries no branch, so the only way to honour "tags on main
+      # only" is to ask git whether main contains the tagged commit.
+      - id: gate
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::tag $GITHUB_REF_NAME is not on main, nothing to build"
+              echo "build=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "tag=develop" >> "$GITHUB_OUTPUT"
+          fi
+
+      # arm64 is built under emulation; the binary is pure Go, so the only cost
+      # is compile time.
+      - uses: docker/setup-qemu-action@v3
+        if: steps.gate.outputs.build == 'true'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.gate.outputs.build == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.gate.outputs.build == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.gate.outputs.build == 'true'
+        with:
+          # root context: server and client share internal/protocol
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.gate.outputs.tag }}
+          build-args: VERSION=${{ steps.gate.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
