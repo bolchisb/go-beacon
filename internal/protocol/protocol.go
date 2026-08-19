@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -84,6 +85,31 @@ type prefixConn struct {
 }
 
 func (c *prefixConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// CountingConn tracks how many bytes crossed the tunnel in each direction, so
+// both ends can report real traffic instead of just "the socket is open".
+type CountingConn struct {
+	net.Conn
+	in  atomic.Uint64
+	out atomic.Uint64
+}
+
+func NewCountingConn(c net.Conn) *CountingConn { return &CountingConn{Conn: c} }
+
+func (c *CountingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.in.Add(uint64(n))
+	return n, err
+}
+
+func (c *CountingConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.out.Add(uint64(n))
+	return n, err
+}
+
+func (c *CountingConn) In() uint64  { return c.in.Load() }
+func (c *CountingConn) Out() uint64 { return c.out.Load() }
 
 // Stream kinds. Each yamux stream opens with one of these, newline terminated.
 const (

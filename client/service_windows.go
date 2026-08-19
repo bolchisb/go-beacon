@@ -1,0 +1,186 @@
+//go:build windows
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/mgr"
+)
+
+const (
+	winServiceName = "beacon"
+	winDisplayName = "go-beacon agent"
+	winDescription = "Maintains the outbound tunnel to the go-beacon relay."
+)
+
+// runUnderServiceManager detects being launched by the Service Control Manager
+// and, when that is the case, runs the agent through the SCM protocol instead
+// of as a console program.
+func runUnderServiceManager() (bool, error) {
+	isService, err := svc.IsWindowsService()
+	if err != nil || !isService {
+		return false, err
+	}
+	return true, svc.Run(winServiceName, &windowsService{})
+}
+
+type windowsService struct{}
+
+func (windowsService) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- svc.Status) (bool, uint32) {
+	const accepted = svc.AcceptStop | svc.AcceptShutdown
+	s <- svc.Status{State: svc.StartPending}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cfg, err := loadConfig(nil)
+		if err != nil {
+			return
+		}
+		runAgent(ctx, cfg)
+	}()
+
+	s <- svc.Status{State: svc.Running, Accepts: accepted}
+	for {
+		select {
+		case <-done:
+			return false, 0
+		case c := <-r:
+			switch c.Cmd {
+			case svc.Interrogate:
+				s <- c.CurrentStatus
+			case svc.Stop, svc.Shutdown:
+				s <- svc.Status{State: svc.StopPending}
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+				}
+				return false, 0
+			}
+		}
+	}
+}
+
+func requireElevation() error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("this needs an elevated prompt: %w", err)
+	}
+	m.Disconnect()
+	return nil
+}
+
+func installPlan(cfg *resolved, target string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "would copy     %s\n", target)
+	fmt.Fprintf(&b, "would write    %s\n", configPath())
+	fmt.Fprintf(&b, "would register service %q (%s)\n", winServiceName, winDisplayName)
+	fmt.Fprintf(&b, "               start type automatic, restart after 5s on failure\n")
+	fmt.Fprintf(&b, "               command: %s run\n", target)
+	fmt.Fprintf(&b, "\nrelay          %s\nagent id       %s\n", cfg.Server, cfg.AgentID)
+	return b.String()
+}
+
+func serviceInstall(target string) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+
+	// replace a previous definition rather than failing on reinstall
+	if existing, err := m.OpenService(winServiceName); err == nil {
+		existing.Control(svc.Stop)
+		existing.Delete()
+		existing.Close()
+	}
+
+	s, err := m.CreateService(winServiceName, target, mgr.Config{
+		DisplayName:  winDisplayName,
+		Description:  winDescription,
+		StartType:    mgr.StartAutomatic,
+		ErrorControl: mgr.ErrorNormal,
+	}, "run")
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	// the agent is the only way back into the machine, so a crash must not
+	// leave it stopped
+	return s.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+	}, 86400)
+}
+
+func serviceUninstall() error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(winServiceName)
+	if err != nil {
+		return nil // already gone
+	}
+	defer s.Close()
+
+	s.Control(svc.Stop)
+	return s.Delete()
+}
+
+func serviceStart() error {
+	return withService(func(s *mgr.Service) error { return s.Start("run") })
+}
+
+func serviceStop() error {
+	return withService(func(s *mgr.Service) error {
+		_, err := s.Control(svc.Stop)
+		return err
+	})
+}
+
+func serviceStatus() (svcInfo, error) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return svcInfo{}, err
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(winServiceName)
+	if err != nil {
+		return svcInfo{}, nil
+	}
+	defer s.Close()
+
+	st, err := s.Query()
+	if err != nil {
+		return svcInfo{Installed: true}, err
+	}
+	return svcInfo{Installed: true, Running: st.State == svc.Running}, nil
+}
+
+func withService(fn func(*mgr.Service) error) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(winServiceName)
+	if err != nil {
+		return fmt.Errorf("service %q is not installed", winServiceName)
+	}
+	defer s.Close()
+	return fn(s)
+}

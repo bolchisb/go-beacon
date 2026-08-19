@@ -48,7 +48,7 @@ client:
 	  echo "building $$os/$$arch"; \
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath \
 	    -ldflags "-s -w -X main.version=$(VERSION)" \
-	    -o dist/beacon-agent-$$os-$$arch$$ext ./client; \
+	    -o dist/beacon-$$os-$$arch$$ext ./client; \
 	done'
 	@ls -lh dist/
 

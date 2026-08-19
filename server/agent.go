@@ -59,7 +59,7 @@ func (s *Server) handleAgentConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	counted := &countingConn{Conn: tunnel}
+	counted := protocol.NewCountingConn(tunnel)
 	cfg := yamux.DefaultConfig()
 	cfg.LogOutput = io.Discard
 	sess, err := yamux.Server(counted, cfg)
@@ -99,7 +99,7 @@ func (s *Server) completeUpgrade(conn net.Conn, br *bufio.Reader) (net.Conn, err
 
 // serveSession owns an agent session for its whole life and is what notices
 // when it dies.
-func (s *Server) serveSession(h protocol.Hello, remote string, sess *yamux.Session, conn *countingConn) {
+func (s *Server) serveSession(h protocol.Hello, remote string, sess *yamux.Session, conn *protocol.CountingConn) {
 	rec, reconnect := s.registry.Connect(h, remote, sess, conn)
 
 	msg := "connected from " + remote
