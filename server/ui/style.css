@@ -1,0 +1,81 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --line: #262d36;
+  --fg: #d7dee7;
+  --muted: #8b96a3;
+  --up: #3fb950;
+  --down: #f85149;
+  --accent: #58a6ff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  align-items: baseline;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+h1 { margin: 0; font-size: 1.1rem; letter-spacing: .08em; text-transform: uppercase; }
+h2 { margin: 0 0 .75rem; font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+
+.stats { display: flex; flex-wrap: wrap; gap: 1.25rem; color: var(--muted); font-size: .85rem; }
+.stats b { color: var(--fg); font-weight: 600; }
+
+#stat-link { padding: 0 .5rem; border-radius: 3px; }
+#stat-link.up { color: var(--up); }
+#stat-link.down { color: var(--down); }
+
+main { padding: 1.5rem; display: grid; gap: 2rem; }
+
+table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr.offline td { color: var(--muted); }
+
+.dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .45rem; }
+.dot.up { background: var(--up); }
+.dot.down { background: var(--down); }
+
+button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 3px;
+  padding: .2rem .6rem;
+  margin-right: .35rem;
+  font: inherit;
+  font-size: .8rem;
+  cursor: pointer;
+}
+button:hover:enabled { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: .35; cursor: default; }
+
+#empty { color: var(--muted); font-size: .85rem; }
+
+#events {
+  list-style: none;
+  margin: 0;
+  padding: .5rem 0 0;
+  max-height: 22rem;
+  overflow-y: auto;
+  font-size: .8rem;
+}
+#events li { padding: .2rem 0; border-bottom: 1px solid var(--line); }
+#events .ts { color: var(--muted); margin-right: .6rem; }
+#events .who { color: var(--accent); margin-right: .6rem; }
+#events .connected { color: var(--up); }
+#events .disconnected, #events .kick { color: var(--down); }

@@ -1,0 +1,23 @@
+# One port serves both audiences: /ui + /api for the dashboard, /agent/connect
+# for the agents. The dashboard is LAN-only by design, so the published port is
+# bound to the host and left unauthenticated until mTLS lands in phase 2.
+services:
+  beacon-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      args:
+        VERSION: dev
+    image: go-beacon/server:dev
+    container_name: beacon-server
+    environment:
+      BEACON_LISTEN: ":8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      # empty today; holds the CA and issued certificates from phase 2 on
+      - beacon-pki:/pki
+    restart: unless-stopped
+
+volumes:
+  beacon-pki:
