@@ -63,6 +63,9 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 		Version:  version,
 	}
 
+	// services must be settled before any stream can arrive
+	setServices(cfg.Services)
+
 	configPath := ""
 	if cfg.exists {
 		configPath = cfg.path

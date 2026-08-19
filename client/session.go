@@ -174,8 +174,8 @@ func upgrade(conn net.Conn, u *url.URL, hello protocol.Hello) (net.Conn, error) 
 	return protocol.WithBuffered(conn, br), nil
 }
 
-// handleStream dispatches one stream opened by the server. SSH, RDP and SFTP
-// become additional cases here.
+// handleStream dispatches one stream opened by the server. Each kind is a
+// self-contained handler; adding a capability means adding a case here.
 func handleStream(stream net.Conn) {
 	defer stream.Close()
 
@@ -191,6 +191,12 @@ func handleStream(stream net.Conn) {
 		if _, err := io.Copy(stream, br); err != nil {
 			slog.Warn("echo failed", "err", err)
 		}
+	case protocol.StreamPTY:
+		handlePTY(stream, br)
+	case protocol.StreamRPC:
+		handleRPC(stream, br)
+	case protocol.StreamForward:
+		handleForward(stream, br)
 	default:
 		slog.Warn("stream: unsupported kind", "kind", kind)
 	}

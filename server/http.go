@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 //go:embed ui
@@ -22,16 +23,19 @@ type Server struct {
 	cfg       Config
 	registry  *Registry
 	events    *EventBus
+	mcp       *mcp.Server
 	startedAt time.Time
 }
 
 func newServer(cfg Config) *Server {
-	return &Server{
+	s := &Server{
 		cfg:       cfg,
 		registry:  newRegistry(),
 		events:    newEventBus(),
 		startedAt: time.Now(),
 	}
+	s.mcp = newMCPServer(s)
+	return s
 }
 
 func (s *Server) routes() http.Handler {
@@ -46,6 +50,14 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("POST /api/agents/{id}/ping", s.handleAgentPing)
 	mux.HandleFunc("POST /api/agents/{id}/kick", s.handleAgentKick)
+	mux.HandleFunc("GET /api/agents/{id}/shell", s.handleShell)
+	mux.HandleFunc("GET /api/agents/{id}/forward/{service}", s.handleForward)
+
+	// MCP, for an assistant running on a developer's laptop. No method is given
+	// because the transport uses POST for calls and GET for the event stream,
+	// and both belong to the same endpoint.
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return s.mcp }, nil))
 
 	// dashboard
 	ui, err := fs.Sub(uiFS, "ui")

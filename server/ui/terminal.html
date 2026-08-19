@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>go-beacon terminal</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+  body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  header { flex: none; }
+  #term { flex: 1; min-height: 0; padding: .5rem; }
+  #term .xterm { height: 100%; }
+  .state { padding: 0 .5rem; border-radius: 3px; }
+  .state.up { color: var(--up); }
+  .state.down { color: var(--down); }
+</style>
+</head>
+<body>
+<header>
+  <h1>go&#8209;beacon</h1>
+  <div class="stats">
+    <span>agent <b id="who">&mdash;</b></span>
+    <span id="state" class="state down">connecting</span>
+  </div>
+</header>
+
+<div id="term"></div>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script>
+const agent = new URLSearchParams(location.search).get('agent');
+document.getElementById('who').textContent = agent || '(missing)';
+document.title = `${agent || 'terminal'} — go-beacon`;
+
+const stateEl = document.getElementById('state');
+function setState(text, up) {
+  stateEl.textContent = text;
+  stateEl.className = `state ${up ? 'up' : 'down'}`;
+}
+
+const term = new Terminal({
+  cursorBlink: true,
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  fontSize: 13,
+  theme: { background: '#0e1116', foreground: '#d7dee7', cursor: '#58a6ff' },
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById('term'));
+fit.fit();
+
+// Frame types: the relay only forwards, so this framing is the agent's
+// contract, not the browser's. Data and resize share one channel because the
+// shell must see them in the order they happened.
+const DATA = 0, RESIZE = 1;
+const encoder = new TextEncoder();
+
+function frame(type, payload) {
+  const buf = new Uint8Array(5 + payload.length);
+  buf[0] = type;
+  new DataView(buf.buffer).setUint32(1, payload.length);
+  buf.set(payload, 5);
+  return buf;
+}
+
+const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+const ws = new WebSocket(`${scheme}://${location.host}/api/agents/${encodeURIComponent(agent)}/shell`);
+ws.binaryType = 'arraybuffer';
+
+function sendResize() {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  const size = new Uint8Array(4);
+  const view = new DataView(size.buffer);
+  view.setUint16(0, term.cols);
+  view.setUint16(2, term.rows);
+  ws.send(frame(RESIZE, size));
+}
+
+ws.onopen = () => {
+  setState('connected', true);
+  // the shell starts at a default size and only learns the real one from here
+  sendResize();
+  term.focus();
+};
+
+ws.onmessage = (ev) => term.write(new Uint8Array(ev.data));
+
+ws.onclose = () => {
+  setState('disconnected', false);
+  term.write('\r\n\x1b[90m[session closed]\x1b[0m\r\n');
+};
+
+ws.onerror = () => setState('connection failed', false);
+
+term.onData((data) => {
+  if (ws.readyState === WebSocket.OPEN) ws.send(frame(DATA, encoder.encode(data)));
+});
+
+term.onResize(sendResize);
+window.addEventListener('resize', () => fit.fit());
+</script>
+</body>
+</html>

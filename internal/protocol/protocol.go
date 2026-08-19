@@ -114,6 +114,10 @@ func (c *CountingConn) Out() uint64 { return c.out.Load() }
 // Stream kinds. Each yamux stream opens with one of these, newline terminated.
 const (
 	StreamEcho = "echo"
+	// StreamPTY carries one interactive terminal. See pty.go for the framing.
+	StreamPTY = "pty"
+	// StreamRPC carries one request/response pair. See rpc.go.
+	StreamRPC = "rpc"
 )
 
 // WriteStreamHeader declares what a freshly opened stream is for.

@@ -47,6 +47,8 @@ func main() {
 		err = cmdInstall(rest)
 	case "uninstall":
 		err = cmdUninstall(rest)
+	case "forward":
+		err = cmdForward(rest)
 	case "update":
 		err = cmdUpdate(rest)
 	case "start", "stop", "restart":
@@ -80,6 +82,7 @@ var commands = []command{
 	{"status", "show whether the agent is connected"},
 	{"run", "run the agent in the foreground"},
 	{"install", "install the agent as a system service"},
+	{"forward", "open a local port that leads to a service on a machine"},
 	{"update", "replace this binary with the latest release"},
 	{"uninstall", "remove the service and the installed binary"},
 	{"start", "start the installed service"},
@@ -102,6 +105,7 @@ func printHelp() {
 	b.WriteString("\n" + styLabel.Render("EXAMPLES") + "\n")
 	b.WriteString(styDim.Render("  beacon install --server https://relay.example.com --id build-01") + "\n")
 	b.WriteString(styDim.Render("  beacon status") + "\n")
+	b.WriteString(styDim.Render("  beacon forward mm01ops rdp --listen 127.0.0.1:3390") + "\n")
 	b.WriteString(styDim.Render("  beacon config set server=https://relay.example.com") + "\n")
 	b.WriteString("\n" + styLabel.Render("ENVIRONMENT") + "\n")
 	b.WriteString(styDim.Render("  BEACON_SERVER, BEACON_AGENT_ID, BEACON_CA_FILE") + "\n")

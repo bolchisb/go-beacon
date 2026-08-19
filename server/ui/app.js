@@ -70,6 +70,7 @@ function buildRow(a) {
 
   const actions = document.createElement('td');
   actions.append(
+    terminalButton(a),
     actionButton('Test', a, async (btn) => {
       const { rtt_ms } = await post(`/api/agents/${encodeURIComponent(a.id)}/ping`);
       btn.textContent = `${rtt_ms.toFixed(1)} ms`;
@@ -78,6 +79,18 @@ function buildRow(a) {
   );
   tr.append(actions);
   return tr;
+}
+
+// The terminal opens in its own tab, so it deliberately skips actionButton's
+// busy-then-restore cycle: there is nothing to wait for here.
+function terminalButton(agent) {
+  const btn = document.createElement('button');
+  btn.textContent = 'SSH';
+  btn.disabled = !agent.online;
+  btn.addEventListener('click', () => {
+    window.open(`terminal.html?agent=${encodeURIComponent(agent.id)}`, '_blank', 'noopener');
+  });
+  return btn;
 }
 
 function actionButton(label, agent, action) {

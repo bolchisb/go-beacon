@@ -16,6 +16,12 @@ type Config struct {
 	Server  string `json:"server"`
 	AgentID string `json:"agent_id"`
 	CAFile  string `json:"ca_file,omitempty"`
+
+	// Services maps a forwardable service name to the local address the agent
+	// dials for it. Absent entries fall back to the built-in defaults; an empty
+	// address withdraws a service. Edited in the file, not in the form: this is
+	// a per-machine detail, not something you change while logging in.
+	Services map[string]string `json:"services,omitempty"`
 }
 
 // source records where an effective value came from. Reporting this is most of
@@ -68,6 +74,9 @@ func loadConfig(flags map[string]string) (*resolved, error) {
 	}
 	r.exists = exists
 	if exists {
+		// Services has no flag and no environment variable, so it is carried
+		// straight across rather than going through set()
+		r.Services = fc.Services
 		r.set(keyServer, fc.Server, fromFile)
 		r.set(keyID, fc.AgentID, fromFile)
 		r.set(keyCA, fc.CAFile, fromFile)
