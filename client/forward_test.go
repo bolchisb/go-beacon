@@ -127,6 +127,9 @@ func TestSetServicesMergesOverDefaultsAndCanWithdraw(t *testing.T) {
 	if services[protocol.ServiceRDP] != "127.0.0.1:3389" {
 		t.Fatalf("the rdp default should survive, got %q", services[protocol.ServiceRDP])
 	}
+	if services[protocol.ServiceSSH] != "127.0.0.1:22" {
+		t.Fatalf("the ssh default should survive, got %q", services[protocol.ServiceSSH])
+	}
 	if services["vnc"] != "127.0.0.1:5900" {
 		t.Fatal("a configured service should be added")
 	}
