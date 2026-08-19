@@ -1,0 +1,65 @@
+# Production deployment. Unlike docker-compose.yml, this file never builds: it
+# runs the image published by .github/workflows/server-image.yml, pinned to an
+# explicit tag so a deploy is reproducible and a rollback is a tag change.
+#
+#   BEACON_IMAGE_TAG=v1.2.3 docker compose -f docker-compose.prod.yml up -d
+#
+# The relay is expected to sit behind a TLS-terminating reverse proxy: the
+# dashboard is unauthenticated and the agent tunnel is plain HTTP until mTLS
+# lands. Two things the proxy must get right, or the relay silently degrades:
+# response buffering off (the /api/events feed is SSE) and no idle or read
+# timeout on /agent/connect (a healthy tunnel is quiet for minutes at a time).
+services:
+  beacon-server:
+    image: ghcr.io/bolchisb/go-beacon-server:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-server
+    # a moving tag such as develop would otherwise keep serving the local copy
+    pull_policy: always
+    environment:
+      BEACON_LISTEN: ":8080"
+    ports:
+      # loopback by default: publish on a routable address only once a proxy
+      # fronts it, or set BEACON_BIND to the interface the proxy reaches
+      - "${BEACON_BIND:-127.0.0.1}:${BEACON_PORT:-8080}:8080"
+    restart: unless-stopped
+
+    # The image is a static binary on scratch. It writes nothing outside /pki,
+    # needs no capabilities and never escalates.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # scratch carries no /etc/passwd, so the uid has to be numeric. Once phase 2
+    # writes the CA into /pki, the named volume needs to be chowned to this uid:
+    # docker volume create leaves it owned by root.
+    user: "65532:65532"
+
+    volumes:
+      - beacon-pki:/pki
+
+    # HEALTHCHECK comes from the image (the binary probes itself); it is
+    # inherited here and deliberately not redefined.
+
+    # A relay is I/O bound and holds one goroutine pair per tunnel. The limits
+    # are a blast radius, not a target — raise them with the agent count.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+        reservations:
+          memory: 64M
+
+    # Without a cap the activity log grows until the host fills up.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # Long enough for in-flight sessions to drain; the server shuts down in 5s.
+    stop_grace_period: 30s
+
+volumes:
+  beacon-pki:
