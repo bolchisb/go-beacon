@@ -197,9 +197,17 @@ services:
 
 secrets:
   # A file on the host, deliberately outside this repository so it can never be
-  # picked up by an image build context. Create it with:
-  #   install -m 0600 /dev/null /etc/beacon/admin-token
-  #   openssl rand -base64 32 > /etc/beacon/admin-token
+  # picked up by an image build context.
+  #
+  # It must be owned by uid 65532, which is what beacon-server runs as. Compose
+  # bind-mounts this file as it finds it: uid, gid and mode under a service's
+  # secrets entry are Swarm-only and are silently ignored here. A root-owned
+  # 0600 file is unreadable to the relay, which then refuses to start rather
+  # than start without a gate.
+  #
+  #   umask 077 && openssl rand -base64 32 > /tmp/beacon-token
+  #   sudo install -D -m 0400 -o 65532 -g 65532 /tmp/beacon-token /etc/beacon/admin-token
+  #   shred -u /tmp/beacon-token
   beacon_admin_token:
     file: ${BEACON_ADMIN_TOKEN_FILE:-/etc/beacon/admin-token}
 
