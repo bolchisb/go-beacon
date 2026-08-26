@@ -269,8 +269,7 @@ shred -u /tmp/beacon-token
 
 **Then, the operator account.** On a fresh deployment the dashboard shows a setup
 form rather than a login: paste the admin token, choose a username and a
-password of at least twelve characters, and that becomes the everyday
-credential. Setup closes behind itself — a second attempt is refused — so there
+password, and that becomes the everyday credential. Setup closes behind itself — a second attempt is refused — so there
 is no window in which whoever reaches the page first owns the relay, and no
 generated password is ever written to a log.
 

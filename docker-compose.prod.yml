@@ -122,11 +122,28 @@ services:
       VAULT_ADDR: "http://127.0.0.1:8200"
     # The configuration is baked into the image, so nothing here can drift out
     # of step with the binary it configures.
-    # IPC_LOCK lets Vault mlock its memory, so unsealed key material is never
-    # written to swap. Without it Vault refuses to start unless mlock is
-    # disabled in the config, which is the worse of the two options.
+    #
+    # Vault mlocks its memory so unsealed key material is never written to
+    # swap. Two separate things have to be true for that to work, and only one
+    # of them is a capability:
+    #
+    # IPC_LOCK is granted below, but the image runs as uid 100 (vault), and a
+    # non-root process gets a capability into its effective set only if the
+    # binary carries it as a file capability. /bin/vault does not, and
+    # no-new-privileges would suppress file capabilities anyway. So the cap is
+    # inert here; it is kept because it costs nothing and is what makes this
+    # work if the image ever runs as root or ships setcap'd.
+    #
+    # What actually gates the lock is RLIMIT_MEMLOCK, which Docker defaults to
+    # 8 MiB. Vault tries to lock more than that and dies with "Failed to lock
+    # memory: cannot allocate memory" -- an ENOMEM from the rlimit, not a
+    # permission error, which is why it reads like a host problem and is not.
+    # Lifting the limit lets an unprivileged process lock all it needs, so the
+    # container keeps both a non-root user and no-new-privileges.
     cap_add:
       - IPC_LOCK
+    ulimits:
+      memlock: -1
     security_opt:
       - no-new-privileges:true
     volumes:

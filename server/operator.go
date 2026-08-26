@@ -169,11 +169,15 @@ func validateCredentials(username, password string) error {
 	if len(username) > 64 {
 		return errors.New("that username is too long")
 	}
-	// Long rather than complex: length is what actually resists guessing, and
-	// composition rules mostly produce passwords people write down.
-	if len([]rune(password)) < 12 {
-		return errors.New("the password must be at least 12 characters")
+	// No minimum length, by explicit choice of the operator: the forms suggest
+	// twelve or more and leave the decision to whoever is typing. The only rule
+	// left is that there has to be something -- an empty password would make
+	// the gate decorative, since verify would then accept it from anyone.
+	if password == "" {
+		return errors.New("a password is required")
 	}
+	// A cap is still worth keeping: argon2 hashes whatever it is given, so an
+	// unbounded password is a way to make the relay do unbounded work.
 	if len(password) > 1024 {
 		return errors.New("that password is too long")
 	}
