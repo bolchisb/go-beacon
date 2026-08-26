@@ -47,6 +47,10 @@ func main() {
 		err = cmdInstall(rest)
 	case "uninstall":
 		err = cmdUninstall(rest)
+	case "login":
+		err = cmdLogin(rest)
+	case "logout":
+		err = cmdLogout(rest)
 	case "ssh":
 		err = cmdSSH(rest)
 	case "forward":

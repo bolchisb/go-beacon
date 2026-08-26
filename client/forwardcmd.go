@@ -37,6 +37,7 @@ func cmdForward(args []string) error {
 	listen := fs.String("listen", "127.0.0.1:0", "local address to listen on; port 0 picks a free one")
 	fs.String(keyServer, "", "relay URL, http:// or https://")
 	fs.String(keyCA, "", "PEM bundle trusted in addition to the system roots")
+	fs.String(keyToken, "", "operator token for the relay's API")
 	fs.Usage = func() {
 		usageFor(fs, "beacon forward AGENT SERVICE", "Open a local port that leads to a service on a remote machine.")
 	}
@@ -87,20 +88,27 @@ func cmdForward(args []string) error {
 			}
 			return err
 		}
-		supervise.Go("forward-session", func() { bridge(ctx, local, target, tlsCfg) })
+		supervise.Go("forward-session", func() { bridge(ctx, local, target, tlsCfg, cfg.Token, cfg.Session) })
 	}
 }
 
 // bridge carries one accepted connection over its own WebSocket. One
 // connection per session keeps a failure local to the session that caused it.
-func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Config) {
+func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Config, token, session string) {
 	defer local.Close()
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
-	c, resp, err := websocket.Dial(ctx, target, &websocket.DialOptions{HTTPClient: client})
+	c, resp, err := websocket.Dial(ctx, target, &websocket.DialOptions{
+		HTTPClient: client,
+		HTTPHeader: apiHeader(token, session),
+	})
 	if err != nil {
 		if resp != nil {
-			slog.Warn("forward: relay refused the session", "status", resp.Status)
+			if resp.StatusCode == http.StatusUnauthorized {
+				slog.Warn("forward: not signed in: run `beacon login`")
+			} else {
+				slog.Warn("forward: relay refused the session", "status", resp.Status)
+			}
 		} else {
 			slog.Warn("forward: cannot reach the relay", "err", err)
 		}

@@ -14,6 +14,7 @@ require (
 	github.com/hashicorp/yamux v0.1.2
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.43.0
 )
 
 require (

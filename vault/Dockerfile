@@ -26,6 +26,18 @@ COPY vault/unseal.sh /usr/local/bin/beacon-vault-unseal
 COPY vault/bootstrap.sh /usr/local/bin/beacon-vault-bootstrap
 RUN chmod 0755 /usr/local/bin/beacon-vault-unseal /usr/local/bin/beacon-vault-bootstrap
 
+# The mount points for the two runtime volumes, created here so they carry the
+# right owner. Docker gives a fresh named volume the ownership of the directory
+# it covers in the image, and root:root if that directory does not exist -- at
+# which point nothing running as uid 100 can write the unseal keys or the token
+# sink, and the stack comes up with Vault stuck uninitialised. Rootless podman
+# happens to remap the owner and hides this, so the directories must exist for
+# a docker deployment to work at all.
+RUN mkdir -p /unseal /agent \
+ && chown vault:vault /unseal /agent \
+ && chmod 0700 /unseal \
+ && chmod 0755 /agent
+
 USER vault
 
 # Same entrypoint and default command as the base image: this stays a Vault, and

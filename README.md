@@ -354,6 +354,7 @@ That registers it as a system service and starts it.
 | `beacon run` | Run in the foreground instead of as a service |
 | `beacon status` | Show whether the agent is connected, and its round-trip time |
 | `beacon config` | Show every setting and where its value came from |
+| `beacon login` / `logout` | Sign in to the relay with the dashboard's username and password |
 | `beacon ssh` | Open a terminal on a machine, in this terminal |
 | `beacon forward` | Open a local port that leads to a service on a remote machine |
 | `beacon update` | Replace the binary with the latest release, verify it, roll back if it fails |
@@ -403,6 +404,8 @@ flags — later wins.
 | `--server` | `BEACON_SERVER` | `http://127.0.0.1:8080` | Relay URL |
 | `--id` | `BEACON_AGENT_ID` | Hostname | Identity shown in the dashboard |
 | `--ca-file` | `BEACON_CA_FILE` | — | Extra trusted CA bundle (HTTPS only) |
+| `--token` | `BEACON_TOKEN` | — | The relay's admin token, for scripts; a person should use `beacon login` instead |
+| `--user` | `BEACON_USER` | — | Operator username, remembered so `beacon login` only asks for a password |
 
 One setting has no flag and no environment variable, because it belongs to the
 machine rather than to a session: `services` in the config file lists what the
@@ -443,6 +446,32 @@ Substitute the file name for your platform: `beacon-linux-amd64`,
 `beacon forward` needs no root: it listens on a high port and exits on Ctrl-C.
 Point it at the relay with `--server`, or save that once with
 `beacon config set server=https://relay.example.com`.
+
+Both `beacon ssh` and `beacon forward` go through the relay's API, so they need
+you signed in where the relay has a gate. Use the same username and password as
+the dashboard:
+
+```sh
+beacon login
+```
+
+The password is read once and never stored. What is kept is the session the
+relay issues for it, which expires on its own — so a workstation config that
+goes astray goes stale, and the relay's admin token stays on the relay. `beacon
+logout` forgets it locally; changing the password in the dashboard is what
+invalidates it everywhere.
+
+The agent tunnel is not affected. An installed agent authenticates on its own
+terms, so a target machine never needs any of this.
+
+> [!NOTE]
+> `--token` and `BEACON_TOKEN` still accept the relay's admin token, for scripts
+> and for a relay with no account yet. Prefer `beacon login` for a person: the
+> admin token is also the recovery credential, and copying it onto every machine
+> that wants a shell means it can no longer be revoked for one of them.
+
+Given a relay that wants credentials and a client with none, both commands say
+so rather than reporting a bare refusal.
 
 ## Usage
 
