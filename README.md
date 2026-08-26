@@ -511,6 +511,7 @@ Every route below requires the agent to show as **connected** in the dashboard.
 | Look at something quickly | The browser terminal | No |
 | A shell in your own terminal | `beacon ssh` | Yes |
 | `scp`, `rsync`, ssh config | `beacon forward … ssh` | Yes |
+| Write code in their environment | VS Code over `beacon forward … ssh --stdio` | Yes |
 | A desktop | `beacon forward … rdp` | Yes |
 | Let an assistant do it | The MCP endpoint | No |
 
@@ -588,6 +589,74 @@ being written there — and the traffic still leaves from inside their network.
 > Agent forwarding lends your key for the length of the session: anyone with
 > root on the target can use the socket while you are connected. Leave it off
 > for a machine you do not trust that far.
+
+### Remote development
+
+This is the route that replaces working through a desktop. The files, the
+toolchain and the build stay on the target machine, with its view of the
+customer's git server and their internal services; the editor and the keyboard
+stay on your own laptop.
+
+It is the `ProxyCommand` entry from the previous section plus an editor, so set
+that up first and confirm plain `ssh target-01` works. Everything below assumes
+it does.
+
+**On the target machine**
+
+| What | How |
+| --- | --- |
+| The agent | `beacon install` then `beacon enroll`, as in [Installing on a target machine](#installing-on-a-target-machine) |
+| An sshd | Linux: usually already running. macOS: **Remote Login**, in Settings → General → Sharing. Windows: the **OpenSSH Server** optional feature |
+| An account, holding your key | Your public key in that account's `authorized_keys`. The relay does not authenticate this hop — the target's own sshd does |
+
+If sshd listens anywhere other than port 22, say so in the agent's config rather
+than in your ssh config. The caller names a service, never an address, so the
+port is the target's business:
+
+```json
+{ "services": { "ssh": "127.0.0.1:2222" } }
+```
+
+**On your workstation**
+
+| What | How |
+| --- | --- |
+| The `beacon` binary | on `PATH` — `ProxyCommand` runs it by name, with no shell of yours to fall back on |
+| A session with the relay | `beacon login` |
+| The ssh entry | the `Host` block from the previous section |
+| VS Code | the **Remote - SSH** extension |
+
+Then run **Remote-SSH: Connect to Host** from the command palette and pick
+`target-01`. VS Code opens a window whose terminal, extensions, debugger and
+source control all run on the target machine, and `git push` from that terminal
+leaves through the customer's network — authenticated by the key still sitting
+on your laptop, because of `ForwardAgent yes`.
+
+> [!WARNING]
+> On the first connection VS Code downloads its own server, roughly 100MB, onto
+> the target from `update.code.visualstudio.com`. In an environment with
+> filtered egress that download is what fails, not the tunnel, and the symptom
+> is a window that hangs on "Setting up SSH Host". Check it before blaming
+> anything here:
+>
+> ```sh
+> ssh target-01 'curl -sI https://update.code.visualstudio.com | head -1'
+> ```
+
+Two things worth knowing about how this behaves:
+
+- VS Code opens several ssh connections to one host, and each one spawns its own
+  `beacon forward --stdio`, so the dashboard shows several sessions for a single
+  editor window. Adding `ControlMaster auto` and a `ControlPath` to the `Host`
+  block collapses them into one.
+- When your relay session expires, ssh fails rather than the editor: the
+  `beacon` process writes its reason to stderr, which ssh passes through. Run
+  `beacon login` again.
+
+> [!NOTE]
+> On a Windows target you land in a Windows shell, with that machine's
+> toolchain. If the one you need lives in WSL, point the `ssh` service at the
+> sshd inside the distribution instead of at the host's.
 
 ### Remote desktop
 
