@@ -45,9 +45,10 @@ services:
       BEACON_ADMIN_TOKEN: ${BEACON_ADMIN_TOKEN:?set BEACON_ADMIN_TOKEN, see .env.example}
       BEACON_VAULT_ADDR: "http://vault:8200"
       BEACON_VAULT_TRANSIT_KEY: ${BEACON_TRANSIT_KEY:-beacon-agent-assertions}
-      # AppRole rather than a long-lived token: the relay logs in and renews.
-      BEACON_VAULT_ROLE_ID: ${BEACON_VAULT_ROLE_ID:?run vault/bootstrap.sh and set this}
-      BEACON_VAULT_SECRET_ID: ${BEACON_VAULT_SECRET_ID:?mint one, see .env.example}
+      # No Vault credential in this environment at all. Vault Agent exchanges a
+      # wrapped, single-use secret id for a short-lived token, keeps it renewed,
+      # and the relay only ever reads that file.
+      BEACON_VAULT_TOKEN_FILE: "/agent/token"
     ports:
       # loopback by default: publish on a routable address only once a proxy
       # fronts it, or set BEACON_BIND to the interface the proxy reaches
@@ -74,6 +75,8 @@ services:
 
     volumes:
       - beacon-state:/pki
+      # Read-only: the relay consumes the token sink, it never writes to it.
+      - vault-agent:/agent:ro
 
     # HEALTHCHECK comes from the image (the binary probes itself); it is
     # inherited here and deliberately not redefined.
@@ -154,6 +157,29 @@ services:
     volumes:
       # Its own volume, and the only container that mounts it.
       - vault-unseal:/unseal
+      # Writable: this is where the wrapped secret id for Vault Agent is left.
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  vault-agent:
+    image: ghcr.io/bolchisb/go-beacon-vault:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-vault-agent
+    pull_policy: always
+    entrypoint: ["vault", "agent", "-config=/vault/beacon/agent.hcl"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - vault-agent:/agent
     depends_on:
       vault:
         condition: service_started
@@ -173,3 +199,6 @@ volumes:
   # makes vault-data unopenable -- but never into the same archive, or the
   # backup carries both the lock and its key.
   vault-unseal:
+  # role id, the wrapped secret id while it is in transit, and the token sink.
+  # Nothing here is long-lived; it does not need backing up.
+  vault-agent:

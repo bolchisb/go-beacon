@@ -56,17 +56,28 @@ EOF
 
 echo "==> approle for the relay"
 vault auth enable approle 2>/dev/null || echo "    already enabled"
+# secret_id_num_uses=1 and a short ttl: the supervisor keeps one wrapped
+# secret_id available for Vault Agent, and any that goes unconsumed expires
+# rather than accumulating in Vault forever.
 vault write "auth/approle/role/$ROLE_NAME" \
   token_policies="$POLICY_NAME" \
   token_ttl=1h \
   token_max_ttl=4h \
-  secret_id_ttl=0 \
-  secret_id_num_uses=0 >/dev/null
+  secret_id_ttl=10m \
+  secret_id_num_uses=1 >/dev/null
+
+# The role id is not a secret, but it does have to reach Vault Agent. Writing
+# it here means a deployment never has to carry it by hand.
+AGENT_DIR="${BEACON_AGENT_DIR:-/agent}"
+if [ -d "$AGENT_DIR" ]; then
+  vault read -field=role_id "auth/approle/role/$ROLE_NAME/role-id" > "$AGENT_DIR/role-id"
+  chmod 0644 "$AGENT_DIR/role-id"
+  echo "==> role id written to $AGENT_DIR/role-id"
+fi
 
 echo
 echo "role_id:"
 vault read -field=role_id "auth/approle/role/$ROLE_NAME/role-id"
 echo
-echo "A secret_id is deliberately not minted here. Create one when you deploy:"
-echo "  vault write -f -wrap-ttl=5m auth/approle/role/$ROLE_NAME/secret-id"
-echo "and hand the wrapping token to the relay, not the secret_id itself."
+echo "No secret_id is minted here. The unseal supervisor mints one, wrapped and"
+echo "single-use, whenever Vault Agent has consumed the last."

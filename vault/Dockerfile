@@ -21,6 +21,7 @@ RUN apk add --no-cache jq
 # one directory means two listener blocks on the same address, and Vault fails
 # to bind. Each config is selected explicitly by path instead.
 COPY vault/config/ /vault/beacon/
+COPY vault/agent.hcl /vault/beacon/agent.hcl
 COPY vault/unseal.sh /usr/local/bin/beacon-vault-unseal
 COPY vault/bootstrap.sh /usr/local/bin/beacon-vault-bootstrap
 RUN chmod 0755 /usr/local/bin/beacon-vault-unseal /usr/local/bin/beacon-vault-bootstrap

@@ -41,6 +41,7 @@ type vault struct {
 	roleID    string
 	secretID  string
 	staticTok string
+	tokenFile string
 
 	mu      sync.RWMutex
 	token   string
@@ -55,6 +56,7 @@ func newVault(cfg Config) *vault {
 		roleID:    cfg.VaultRoleID,
 		secretID:  cfg.VaultSecretID,
 		staticTok: cfg.VaultToken,
+		tokenFile: cfg.VaultTokenFile,
 		httpc:     &http.Client{Timeout: 10 * time.Second},
 		pubKeys:   map[int]ed25519.PublicKey{},
 	}
@@ -86,13 +88,32 @@ func (v *vault) start() {
 	slog.Info("vault ready", "key", v.transit, "versions", len(v.pubKeys))
 }
 
+// login obtains a Vault token. Three sources, in order of preference.
+//
+// The token sink comes first because it is the one that keeps a long-lived
+// credential out of this process entirely: Vault Agent authenticates with a
+// wrapped, single-use secret id and writes a short-lived token here, renewing
+// it. Since call() re-runs login on a 403, a token rotated underneath us is
+// picked up on the next request without anything else having to notice.
 func (v *vault) login() error {
+	if v.tokenFile != "" {
+		data, err := os.ReadFile(v.tokenFile)
+		if err != nil {
+			return fmt.Errorf("reading the Vault Agent token sink: %w", err)
+		}
+		tok := strings.TrimSpace(string(data))
+		if tok == "" {
+			return fmt.Errorf("the Vault Agent token sink at %s is empty", v.tokenFile)
+		}
+		v.setToken(tok)
+		return nil
+	}
 	if v.staticTok != "" {
 		v.setToken(v.staticTok)
 		return nil
 	}
 	if v.roleID == "" || v.secretID == "" {
-		return fmt.Errorf("no vault credentials: set a token, or a role id and secret id")
+		return fmt.Errorf("no vault credentials: set a token file, a token, or a role id and secret id")
 	}
 	var out struct {
 		Auth struct {

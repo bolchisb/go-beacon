@@ -22,7 +22,11 @@ type Config struct {
 	// Vault issues and signs agent credentials. Either VaultToken or the
 	// AppRole pair authenticates the relay to it; compose uses a token in
 	// development and AppRole in production.
-	VaultAddr       string // BEACON_VAULT_ADDR
+	VaultAddr string // BEACON_VAULT_ADDR
+	// VaultTokenFile is the Vault Agent token sink. Preferred over the two
+	// below: the relay then never holds a long-lived credential, and the agent
+	// rotates the token underneath it.
+	VaultTokenFile  string // BEACON_VAULT_TOKEN_FILE
 	VaultToken      string // BEACON_VAULT_TOKEN
 	VaultRoleID     string // BEACON_VAULT_ROLE_ID
 	VaultSecretID   string // BEACON_VAULT_SECRET_ID
@@ -35,6 +39,7 @@ func loadConfig() Config {
 		AdminToken:      env("BEACON_ADMIN_TOKEN", ""),
 		StateDir:        env("BEACON_STATE_DIR", "/pki"),
 		VaultAddr:       env("BEACON_VAULT_ADDR", ""),
+		VaultTokenFile:  env("BEACON_VAULT_TOKEN_FILE", ""),
 		VaultToken:      env("BEACON_VAULT_TOKEN", ""),
 		VaultRoleID:     env("BEACON_VAULT_ROLE_ID", ""),
 		VaultSecretID:   env("BEACON_VAULT_SECRET_ID", ""),

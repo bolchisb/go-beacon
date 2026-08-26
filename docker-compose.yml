@@ -24,16 +24,18 @@ services:
       BEACON_ADMIN_TOKEN: "${BEACON_ADMIN_TOKEN:-dev-operator-token}"
       BEACON_VAULT_ADDR: "http://vault:8200"
       BEACON_VAULT_TRANSIT_KEY: "beacon-agent-assertions"
-      # AppRole, the same way production authenticates. `make vault-init`
-      # mints these and writes them to .env, which Compose reads from here.
-      BEACON_VAULT_ROLE_ID: "${BEACON_VAULT_ROLE_ID:-}"
-      BEACON_VAULT_SECRET_ID: "${BEACON_VAULT_SECRET_ID:-}"
+      # No credential in the environment. Vault Agent keeps a short-lived
+      # token in this file and renews it; the relay never holds the AppRole
+      # secret id at all.
+      BEACON_VAULT_TOKEN_FILE: "/agent/token"
     ports:
       - "8080:8080"
     volumes:
       # Caches the transit public key so the relay keeps verifying agents while
       # Vault is sealed, restarting or unreachable.
       - beacon-state:/pki
+      # Read-only: the relay consumes the token sink, it never writes to it.
+      - vault-agent:/agent:ro
     depends_on:
       # service_started, not service_healthy, and deliberately: the relay is
       # designed to keep serving a connected fleet through a Vault outage, so
@@ -82,6 +84,24 @@ services:
       # A volume of its own. The unseal shares must not travel with a backup of
       # the data they open.
       - vault-unseal:/unseal
+      # Writable: this is where the wrapped secret id for Vault Agent is left.
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
+    restart: unless-stopped
+
+  # Turns a wrapped, single-use secret id into a short-lived token and keeps it
+  # renewed, so no long-lived credential ever reaches the relay's environment.
+  vault-agent:
+    build:
+      context: .
+      dockerfile: vault/Dockerfile
+    image: go-beacon/vault:dev
+    container_name: beacon-vault-agent
+    entrypoint: ["vault", "agent", "-config=/vault/beacon/agent.hcl"]
+    volumes:
+      - vault-agent:/agent
     depends_on:
       vault:
         condition: service_started
@@ -90,6 +110,8 @@ services:
 volumes:
   beacon-state:
   vault-data:
+  # role id, the wrapped secret id in transit, and the token sink.
+  vault-agent:
   # Holds the unseal shares and the root token. Back this up separately from
   # vault-data, and never into the same archive.
   vault-unseal:

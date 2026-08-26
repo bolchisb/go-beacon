@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -122,5 +123,67 @@ func TestLoadCachedKeysFailsCleanlyOnGarbage(t *testing.T) {
 	}
 	if err := v.loadCachedKeys(); err == nil {
 		t.Fatal("garbage in the cache was accepted")
+	}
+}
+
+func TestLoginReadsTheAgentTokenSink(t *testing.T) {
+	dir := t.TempDir()
+	sink := filepath.Join(dir, "token")
+	if err := os.WriteFile(sink, []byte("hvs.first-token\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	v := &vault{addr: "http://vault:8200", tokenFile: sink, pubKeys: map[int]ed25519.PublicKey{}}
+	if err := v.login(); err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	if got := v.token; got != "hvs.first-token" {
+		t.Errorf("token is %q, want the sink contents with whitespace trimmed", got)
+	}
+
+	// Vault Agent rotates the token underneath the relay. Because call() runs
+	// login again on a 403, re-reading is all that has to work.
+	if err := os.WriteFile(sink, []byte("hvs.rotated-token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.login(); err != nil {
+		t.Fatalf("re-login failed: %v", err)
+	}
+	if got := v.token; got != "hvs.rotated-token" {
+		t.Errorf("token is %q, want the rotated value", got)
+	}
+}
+
+func TestLoginFailsClearlyWhenTheSinkIsUnusable(t *testing.T) {
+	dir := t.TempDir()
+
+	missing := &vault{tokenFile: filepath.Join(dir, "absent")}
+	if err := missing.login(); err == nil {
+		t.Error("a missing token sink was accepted")
+	}
+
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte("   \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&vault{tokenFile: empty}).login(); err == nil {
+		t.Error("an empty token sink was accepted")
+	}
+}
+
+func TestTokenSinkWinsOverTheOtherSources(t *testing.T) {
+	// The sink is the only source that keeps a long-lived credential out of the
+	// relay, so it must not be shadowed by a stale env var left behind.
+	dir := t.TempDir()
+	sink := filepath.Join(dir, "token")
+	if err := os.WriteFile(sink, []byte("hvs.from-sink"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := &vault{tokenFile: sink, staticTok: "hvs.from-env", roleID: "r", secretID: "s"}
+	if err := v.login(); err != nil {
+		t.Fatal(err)
+	}
+	if v.token != "hvs.from-sink" {
+		t.Errorf("token is %q, want the sink to take precedence", v.token)
 	}
 }
