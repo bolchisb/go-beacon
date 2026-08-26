@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
@@ -54,6 +55,17 @@ func cmdRun(args []string) error {
 // runAgent is the whole agent: identity, control socket, and the supervised
 // tunnel. The service entry points call straight into it.
 func runAgent(ctx context.Context, cfg *resolved) error {
+	// The key is loaded, never generated here: an agent that minted its own
+	// identity at runtime would be enrolling itself, which is the opposite of
+	// the point. `beacon install` is where enrolment happens.
+	priv, err := ensureKeypair(&cfg.Config)
+	if err != nil {
+		return err
+	}
+	if cfg.Assertion == "" {
+		return fmt.Errorf("this agent is not enrolled with %s: run `beacon install` again", cfg.Server)
+	}
+
 	tlsCfg, err := tlsConfig(cfg.CAFile)
 	if err != nil {
 		return err
@@ -120,7 +132,7 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 	slog.Info("agent starting", "id", hello.AgentID, "server", cfg.Server,
 		"platform", hello.OS+"/"+hello.Arch, "version", version)
 
-	superviseSessions(ctx, cfg.Server, hello, tlsCfg, st)
+	superviseSessions(ctx, cfg, hello, tlsCfg, st, priv)
 	slog.Info("agent stopped")
 	return nil
 }
@@ -128,7 +140,8 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 // superviseSessions keeps exactly one session alive, forever. An agent that gives up
 // would need someone to log into the machine to restart it, which is the one
 // thing the relay exists to avoid.
-func superviseSessions(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config, st *agentState) {
+func superviseSessions(ctx context.Context, cfg *resolved, hello protocol.Hello, tlsCfg *tls.Config, st *agentState, priv ed25519.PrivateKey) {
+	server := cfg.Server
 	backoff := minBackoff
 
 	for ctx.Err() == nil {
@@ -139,7 +152,13 @@ func superviseSessions(ctx context.Context, server string, hello protocol.Hello,
 		// that killed itself over one bad frame would need someone to walk to
 		// the machine.
 		err := supervise.Do("session", func() error {
-			return runSession(ctx, server, hello, tlsCfg, st)
+			// Fetched fresh each attempt: the challenge is single use, so a
+			// reconnect cannot reuse the last one.
+			identity, err := identityHeaders(cfg, priv)
+			if err != nil {
+				return err
+			}
+			return runSession(ctx, server, hello, tlsCfg, st, identity)
 		})
 		if ctx.Err() != nil {
 			return
