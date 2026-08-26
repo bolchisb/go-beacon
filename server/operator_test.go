@@ -51,8 +51,12 @@ func TestValidateCredentials(t *testing.T) {
 	if err := validateCredentials("", goodPassword); err == nil {
 		t.Error("an empty username was accepted")
 	}
-	if err := validateCredentials("admin", "short"); err == nil {
-		t.Error("a short password was accepted")
+	if err := validateCredentials("admin", ""); err == nil {
+		t.Error("an empty password was accepted")
+	}
+	// Short is allowed on purpose; empty is not.
+	if err := validateCredentials("admin", "x"); err != nil {
+		t.Errorf("a short password was rejected: %v", err)
 	}
 	if err := validateCredentials("admin", goodPassword); err != nil {
 		t.Errorf("a reasonable pair was rejected: %v", err)

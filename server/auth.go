@@ -392,7 +392,7 @@ const bootstrapFields = `<form method="post" action="/api/bootstrap">
      from the relay host, then choose the credentials you will use from now on.</p>
   <input type="password" name="token" placeholder="Admin token" autofocus>
   <input name="username" placeholder="Choose a username" autocomplete="username">
-  <input type="password" name="password" placeholder="Choose a password (12+ characters)"
+  <input type="password" name="password" placeholder="Choose a password"
          autocomplete="new-password">
   <input type="password" name="password_confirm" placeholder="Repeat the password"
          autocomplete="new-password">
