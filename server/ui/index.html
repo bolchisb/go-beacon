@@ -16,6 +16,7 @@
     <span>uptime <b id="stat-uptime">&mdash;</b></span>
     <span>v<b id="stat-version">&mdash;</b></span>
     <span id="stat-link" class="down">disconnected</span>
+    <span id="stat-operator" class="operator"></span>
   </div>
 </header>
 
@@ -38,6 +39,21 @@
   <section>
     <h2>Events</h2>
     <ul id="events"></ul>
+  </section>
+
+  <section id="account">
+    <h2>Account</h2>
+    <form id="password-form" autocomplete="off">
+      <input type="password" name="current_password" placeholder="Current password"
+             autocomplete="current-password" required>
+      <input type="password" name="password" placeholder="New password (12+ characters)"
+             autocomplete="new-password" required>
+      <input type="password" name="password_confirm" placeholder="Repeat the new password"
+             autocomplete="new-password" required>
+      <button type="submit">Change password</button>
+      <span id="password-note"></span>
+    </form>
+    <p class="hint">Changing the password signs out every other session.</p>
   </section>
 </main>
 

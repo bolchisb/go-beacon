@@ -26,16 +26,20 @@ type Server struct {
 	mcp       *mcp.Server
 	auth      *auth
 	vault     *vault
+	ops       *operatorStore
 	startedAt time.Time
 }
 
 func newServer(cfg Config) *Server {
+	v := newVault(cfg)
+	ops := newOperatorStore(v, cfg.StateDir)
 	s := &Server{
 		cfg:       cfg,
 		registry:  newRegistry(),
 		events:    newEventBus(),
-		auth:      newAuth(cfg.AdminToken),
-		vault:     newVault(cfg),
+		auth:      newAuth(cfg.AdminToken, ops),
+		vault:     v,
+		ops:       ops,
 		startedAt: time.Now(),
 	}
 	s.mcp = newMCPServer(s)
@@ -79,6 +83,10 @@ func (s *Server) routes() http.Handler {
 	// from the gate by name in auth.open rather than by living outside it.
 	mux.HandleFunc("POST /api/login", s.auth.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.auth.handleLogout)
+	mux.HandleFunc("POST /api/bootstrap", s.auth.handleBootstrap)
+
+	// Behind the gate, unlike the three above.
+	mux.HandleFunc("POST /api/operator/password", s.auth.handleChangePassword)
 
 	return s.auth.protect(mux)
 }
@@ -89,6 +97,7 @@ type serverInfo struct {
 	AgentsOnline  int     `json:"agents_online"`
 	AgentsKnown   int     `json:"agents_known"`
 	AuthEnabled   bool    `json:"auth_enabled"`
+	Operator      string  `json:"operator,omitempty"`
 }
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +108,15 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		AgentsOnline:  online,
 		AgentsKnown:   total,
 		AuthEnabled:   s.auth.enabled(),
+		Operator:      s.operatorName(),
 	})
+}
+
+func (s *Server) operatorName() string {
+	if rec := s.ops.current(); rec != nil {
+		return rec.Username
+	}
+	return ""
 }
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {

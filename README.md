@@ -57,7 +57,7 @@ a defect only reproduces there, the same tunnel is the debugging channel.
 | Network requirement | A single outbound TCP connection from the target to the relay |
 | Ports opened on the target | None |
 | Transport security | TLS, terminated by the relay or by a proxy in front of it |
-| Operator authentication | Token, exchanged for a session cookie in a browser |
+| Operator authentication | Username and password, stored in Vault, set up on first run |
 | Agent authentication | **Not yet** — see [Security](#security) and the [roadmap](#roadmap) |
 | Runtime dependencies | None on the agent. The relay needs a Vault, shipped alongside it |
 | Development | AI-assisted — see [How this was built](#how-this-was-built) |
@@ -98,7 +98,7 @@ developer workstation                relay                 target machine
 | MCP bridge | Commands, files and clipboard on a target, driven by an AI assistant | Available |
 | Port forwarding | A local port that leads to a service on the target: ssh, remote desktop, or anything else it hosts | Available |
 | Clipboard | Read and replace the target's clipboard | Available (Windows, macOS) |
-| Operator authentication | Token gate on the dashboard, the API and the MCP endpoint | Available |
+| Operator authentication | Username and password gating the dashboard, the API and the MCP endpoint | Available |
 | Credential backend | Vault, unsealed automatically, issuing signed agent credentials | Available |
 | Agent enrolment | One-time wrapped token at install, per-agent key generated on the machine | Planned |
 | Agent authentication | Signed assertion plus proof of possession on connect | Planned |
@@ -247,39 +247,56 @@ To run published images instead of building from source, see
 ### Operator authentication
 
 The dashboard, the API and the MCP endpoint all grant command execution on every
-connected machine. One token gates all three.
+connected machine. One account gates all three.
 
-Create it as a file on the relay host, outside the repository so it can never be
-picked up by an image build:
+**First, the admin token.** It authorises the initial setup and is the way back
+in if the password is ever lost. Create it as a file on the relay host, outside
+the repository so it can never be picked up by an image build:
 
 ```sh
-sudo install -D -m 0600 /dev/null /etc/beacon/admin-token
-openssl rand -base64 32 | sudo tee /etc/beacon/admin-token >/dev/null
+umask 077 && openssl rand -base64 32 > /tmp/beacon-token
+sudo install -D -m 0400 -o 65532 -g 65532 /tmp/beacon-token /etc/beacon/admin-token
+shred -u /tmp/beacon-token
 ```
 
-`docker-compose.prod.yml` mounts that file and points `BEACON_ADMIN_TOKEN_FILE`
-at it. A development stack can use `BEACON_ADMIN_TOKEN` directly instead; both
-work, and the file is preferred because an environment variable is visible to
-`docker inspect` and to anything that reads the process environment.
+> [!IMPORTANT]
+> The owner matters. The relay container runs as uid 65532 and Compose
+> bind-mounts the file exactly as it finds it — `uid`, `gid` and `mode` under a
+> service's `secrets:` entry are Swarm-only and are silently ignored otherwise.
+> A root-owned `0600` file is unreadable to the relay, and the relay then
+> **refuses to start** rather than starting without a gate. That is the intended
+> failure, but it is a confusing one if the ownership is unexpected.
+
+**Then, the operator account.** On a fresh deployment the dashboard shows a setup
+form rather than a login: paste the admin token, choose a username and a
+password of at least twelve characters, and that becomes the everyday
+credential. Setup closes behind itself — a second attempt is refused — so there
+is no window in which whoever reaches the page first owns the relay, and no
+generated password is ever written to a log.
+
+The account lives in Vault, so it survives redeploys, and it is cached beside
+the transit keys so that a sealed Vault does not lock you out of your own
+dashboard. Change the password from the **Account** section of the dashboard;
+doing so signs every other session out and leaves yours alone.
 
 > [!WARNING]
-> With neither set, the relay starts **open**. It logs a warning saying so and
-> reports `auth_enabled: false` from `/api/server`, but it will serve the
-> dashboard, the API and the MCP endpoint to anyone who reaches it.
+> With no admin token and no account, the relay starts **open**. It logs a
+> warning saying so and reports `auth_enabled: false` from `/api/server`, but it
+> will serve the dashboard, the API and the MCP endpoint to anyone who reaches
+> it.
 
 Signing in depends on what is asking:
 
 | Client | How |
 | --- | --- |
-| Browser | A sign-in form appears; the token is exchanged for a session cookie lasting 12 hours |
-| `curl`, scripts | `Authorization: Bearer <token>` |
+| Browser | Username and password, exchanged for a session cookie lasting 12 hours |
+| Browser, password lost | The admin token, under **Lost the password?** on the sign-in page |
+| `curl`, scripts | `Authorization: Bearer <admin token>` |
 | An AI assistant | The same header, passed when the MCP endpoint is registered |
 
 The agent tunnel and the health probe are deliberately exempt: agents will
 authenticate on their own terms, and the container health check runs with no
 credentials to offer.
-
-Rotating the token and restarting signs every operator out immediately.
 
 ### How the relay gets its own credentials
 

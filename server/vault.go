@@ -331,3 +331,43 @@ func (v *vault) call(method, path string, body, out any, authed bool) error {
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
+
+// ---- KV v2 -----------------------------------------------------------------
+//
+// Used for the operator account. KV v2 nests the payload under data.data on the
+// way out and expects it under data on the way in, which is easy to get wrong
+// and produces a silently empty record when you do.
+
+const kvMount = "secret"
+
+func (v *vault) kvGet(path string, out any) (bool, error) {
+	if !v.configured() {
+		return false, fmt.Errorf("no vault configured")
+	}
+	var resp struct {
+		Data struct {
+			Data json.RawMessage `json:"data"`
+		} `json:"data"`
+	}
+	err := v.call(http.MethodGet, kvMount+"/data/"+path, nil, &resp, true)
+	if err != nil {
+		// A path that has never been written is a 404, which is an answer
+		// rather than a failure.
+		if strings.Contains(err.Error(), "404") {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(resp.Data.Data) == 0 {
+		return false, nil
+	}
+	return true, json.Unmarshal(resp.Data.Data, out)
+}
+
+func (v *vault) kvPut(path string, in any) error {
+	if !v.configured() {
+		return fmt.Errorf("no vault configured")
+	}
+	return v.call(http.MethodPost, kvMount+"/data/"+path,
+		map[string]any{"data": in}, nil, true)
+}
