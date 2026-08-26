@@ -562,14 +562,32 @@ local port, and the bytes leave over 443.
 > on your own machine instead, which looks like the tunnel asking for a password
 > when it is really your laptop.
 
-For something you use daily, name it once in `~/.ssh/config`:
+For something you use daily, drop the port. `--stdio` puts one session on
+stdin and stdout instead of a listener, which is what ssh's `ProxyCommand`
+expects, so ssh starts and stops the tunnel itself:
 
 ```
 Host build-vm-01
-    HostName 127.0.0.1
-    Port 2222
     User you
+    ProxyCommand beacon forward %h ssh --stdio
+    ForwardAgent yes
 ```
+
+`%h` is the host you typed, so naming the block after the agent id lets one
+entry cover several machines: list them on the `Host` line, or match them with
+a pattern. Then `ssh build-vm-01` works with no second terminal, and so does
+everything built on ssh: `scp`, `rsync`, `git`, VS Code Remote-SSH, JetBrains
+Gateway.
+
+`ForwardAgent yes` is what keeps your git credentials out of the customer's
+environment. The key stays on your laptop and only signatures cross the tunnel,
+so `git push` from the target machine authenticates as you without a token ever
+being written there — and the traffic still leaves from inside their network.
+
+> [!WARNING]
+> Agent forwarding lends your key for the length of the session: anyone with
+> root on the target can use the socket while you are connected. Leave it off
+> for a machine you do not trust that far.
 
 ### Remote desktop
 

@@ -34,7 +34,7 @@ import (
 // entry cover every agent.
 func cmdForward(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: beacon forward AGENT SERVICE [flags]   (for example: beacon forward mm01ops rdp)")
+		return fmt.Errorf("usage: beacon forward AGENT SERVICE [flags]   (for example: beacon forward build-vm-01 rdp)")
 	}
 	agent, service := args[0], args[1]
 

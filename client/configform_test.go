@@ -11,7 +11,7 @@ import (
 
 func testForm() *configForm {
 	return newConfigForm(&resolved{
-		Config:  Config{Server: "http://127.0.0.1:8080", AgentID: "mm01ops.codeops.local"},
+		Config:  Config{Server: "http://127.0.0.1:8080", AgentID: "build-vm-01.example.com"},
 		sources: map[string]source{keyServer: fromFile, keyID: fromFile, keyCA: fromDefault},
 		path:    "/etc/beacon/config.json",
 		exists:  true,
@@ -41,7 +41,7 @@ func TestEnterSavesCurrentValues(t *testing.T) {
 		t.Fatalf("enter should save and finish, got saved=%v done=%v err=%q", f.saved, f.done, f.err)
 	}
 	got := f.result()
-	if got.Server != "http://127.0.0.1:8080" || got.AgentID != "mm01ops.codeops.local" {
+	if got.Server != "http://127.0.0.1:8080" || got.AgentID != "build-vm-01.example.com" {
 		t.Fatalf("unexpected result: %+v", got)
 	}
 }
@@ -64,7 +64,7 @@ func TestTabMovesFocusAndTypingEditsTheFocusedField(t *testing.T) {
 	if f.focus != 1 {
 		t.Fatalf("tab should move focus to id, got %d", f.focus)
 	}
-	if got := f.result().AgentID; got != "mm01ops.codeops.local-x" {
+	if got := f.result().AgentID; got != "build-vm-01.example.com-x" {
 		t.Fatalf("typing edited the wrong field: id=%q", got)
 	}
 	if got := f.result().Server; got != "http://127.0.0.1:8080" {
