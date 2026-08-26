@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/coder/websocket"
 )
 
@@ -45,9 +46,9 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 
 	// Closing the stream when the browser goes away is what stops the shell on
 	// the far side; the reverse copy then returns and the handler unwinds.
-	go func() {
+	supervise.Go("shell-pump:"+id, func() {
 		io.Copy(stream, ws)
 		stream.Close()
-	}()
+	})
 	io.Copy(ws, stream)
 }

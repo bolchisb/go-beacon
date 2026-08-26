@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/hashicorp/yamux"
 )
 
@@ -78,7 +79,7 @@ func (r *Registry) Connect(h protocol.Hello, remoteAddr string, sess *yamux.Sess
 	rec.rttNanos.Store(-1)
 
 	if stale != nil {
-		go stale.Close()
+		supervise.Go("close-stale:"+h.AgentID, func() { stale.Close() })
 	}
 	return rec, reconnect
 }

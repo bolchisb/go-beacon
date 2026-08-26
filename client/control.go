@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/hashicorp/yamux"
 )
 
@@ -168,12 +169,12 @@ func serveControl(ctx context.Context, st *agentState) (string, error) {
 		}
 
 		srv := &http.Server{Handler: mux}
-		go func() {
+		supervise.Go("control-shutdown", func() {
 			<-ctx.Done()
 			srv.Close()
 			os.Remove(path)
-		}()
-		go srv.Serve(l)
+		})
+		supervise.Go("control-socket", func() { srv.Serve(l) })
 		return path, nil
 	}
 	return "", lastErr

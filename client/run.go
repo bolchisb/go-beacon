@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 )
 
 const (
@@ -112,28 +113,34 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 		target, err := updateTarget()
 		if err == nil {
 			slog.Info("auto-update enabled", "every", autoUpdateInterval, "binary", target)
-			go autoUpdateLoop(ctx, target)
+			supervise.Go("auto-update", func() { autoUpdateLoop(ctx, target) })
 		}
 	}
 
 	slog.Info("agent starting", "id", hello.AgentID, "server", cfg.Server,
 		"platform", hello.OS+"/"+hello.Arch, "version", version)
 
-	supervise(ctx, cfg.Server, hello, tlsCfg, st)
+	superviseSessions(ctx, cfg.Server, hello, tlsCfg, st)
 	slog.Info("agent stopped")
 	return nil
 }
 
-// supervise keeps exactly one session alive, forever. An agent that gives up
+// superviseSessions keeps exactly one session alive, forever. An agent that gives up
 // would need someone to log into the machine to restart it, which is the one
 // thing the relay exists to avoid.
-func supervise(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config, st *agentState) {
+func superviseSessions(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config, st *agentState) {
 	backoff := minBackoff
 
 	for ctx.Err() == nil {
 		start := time.Now()
 		st.connecting()
-		err := runSession(ctx, server, hello, tlsCfg, st)
+		// A panic inside a session becomes an ordinary session failure: the
+		// loop below already knows how to back off and try again, and an agent
+		// that killed itself over one bad frame would need someone to walk to
+		// the machine.
+		err := supervise.Do("session", func() error {
+			return runSession(ctx, server, hello, tlsCfg, st)
+		})
 		if ctx.Err() != nil {
 			return
 		}

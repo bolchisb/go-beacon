@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 )
 
 // ptyTerm is one interactive terminal. The two implementations differ only in
@@ -34,10 +35,10 @@ func handlePTY(stream net.Conn, br *bufio.Reader) {
 
 	// Closing the stream when the shell exits is what makes the browser tab
 	// notice; without it the socket would sit open around a dead process.
-	go func() {
+	supervise.Go("pty-pump", func() {
 		io.Copy(stream, term)
 		stream.Close()
-	}()
+	})
 
 	for {
 		typ, payload, err := protocol.ReadPTYFrame(br)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/hashicorp/yamux"
 )
 
@@ -70,7 +71,7 @@ func (s *Server) handleAgentConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go s.serveSession(hello, r.RemoteAddr, sess, counted)
+	supervise.Go("session:"+hello.AgentID, func() { s.serveSession(hello, r.RemoteAddr, sess, counted) })
 }
 
 // identify is the single place agent identity is established. Today it comes
@@ -110,14 +111,14 @@ func (s *Server) serveSession(h protocol.Hello, remote string, sess *yamux.Sessi
 	slog.Info("agent online", "agent", h.AgentID, "host", h.Hostname, "remote", remote, "reconnect", reconnect)
 	s.events.Publish(Event{Type: "connected", AgentID: h.AgentID, Message: msg})
 
-	go s.pingLoop(rec, sess)
+	supervise.Go("ping:"+h.AgentID, func() { s.pingLoop(rec, sess) })
 
 	for {
 		stream, err := sess.AcceptStream()
 		if err != nil {
 			break
 		}
-		go s.handleAgentStream(h.AgentID, stream)
+		supervise.Go("agent-stream:"+h.AgentID, func() { s.handleAgentStream(h.AgentID, stream) })
 	}
 
 	sess.Close()
