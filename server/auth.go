@@ -76,12 +76,19 @@ func (a *auth) sessionKey() []byte {
 	return a.token
 }
 
-// open lists the paths that must work without an operator session. The default
-// is the other way round -- anything not named here is protected -- so a route
-// added later is closed until someone deliberately opens it.
+// open lists the paths that must work without an operator *session*. The
+// default is the other way round -- anything not named here is protected -- so
+// a route added later is closed until someone deliberately opens it.
+//
+// Exempt is not the same as unauthenticated. The agent paths carry their own
+// proof: the tunnel needs a Vault-signed assertion and a signed challenge, and
+// enrolment checks operator credentials out of its own request body. They are
+// listed here because they cannot use a browser session, not because they let
+// anyone in.
 func (a *auth) open(path string) bool {
 	switch path {
-	case protocol.ConnectPath, "/healthz", "/api/login", "/api/logout", "/api/bootstrap":
+	case protocol.ConnectPath, protocol.ChallengePath, protocol.EnrollPath,
+		"/healthz", "/api/login", "/api/logout", "/api/bootstrap":
 		return true
 	}
 	return false

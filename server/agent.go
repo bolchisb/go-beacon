@@ -38,6 +38,22 @@ func (s *Server) handleAgentConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Identity comes from the assertion, not from the header. The headers stay
+	// descriptive -- hostname, os, version -- and stop being trusted for who
+	// this is.
+	verifiedID, err := s.verifyAgent(r)
+	if err != nil {
+		slog.Warn("agent refused", "claimed", hello.AgentID, "remote", r.RemoteAddr, "err", err)
+		s.events.Publish(Event{Type: "refused", AgentID: hello.AgentID,
+			Message: "connection refused: " + err.Error()})
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if verifiedID != hello.AgentID {
+		slog.Info("agent id taken from its assertion", "claimed", hello.AgentID, "actual", verifiedID)
+	}
+	hello.AgentID = verifiedID
 	if !strings.EqualFold(r.Header.Get("Upgrade"), protocol.UpgradeProto) {
 		http.Error(w, "expected Upgrade: "+protocol.UpgradeProto, http.StatusUpgradeRequired)
 		return

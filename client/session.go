@@ -24,8 +24,8 @@ const (
 )
 
 // runSession holds one tunnel open until it dies or the process is stopped.
-func runSession(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config, st *agentState) error {
-	conn, err := dialUpgrade(ctx, server, hello, tlsCfg)
+func runSession(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config, st *agentState, identity http.Header) error {
+	conn, err := dialUpgrade(ctx, server, hello, tlsCfg, identity)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func pingLoop(st *agentState, sess *yamux.Session) {
 // dialUpgrade performs the HTTP/1.1 upgrade by hand and returns the raw
 // connection underneath it. Going out over HTTP rather than a bare TCP port is
 // what lets the agent reach the relay from a locked-down network.
-func dialUpgrade(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config) (net.Conn, error) {
+func dialUpgrade(ctx context.Context, server string, hello protocol.Hello, tlsCfg *tls.Config, identity http.Header) (net.Conn, error) {
 	u, err := url.Parse(server)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func dialUpgrade(ctx context.Context, server string, hello protocol.Hello, tlsCf
 		return nil, err
 	}
 
-	tunnel, err := upgrade(conn, u, hello)
+	tunnel, err := upgrade(conn, u, hello, identity)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -150,7 +150,7 @@ func dial(ctx context.Context, u *url.URL, tlsCfg *tls.Config) (net.Conn, error)
 	return netDialer.DialContext(ctx, "tcp", addr)
 }
 
-func upgrade(conn net.Conn, u *url.URL, hello protocol.Hello) (net.Conn, error) {
+func upgrade(conn net.Conn, u *url.URL, hello protocol.Hello, identity http.Header) (net.Conn, error) {
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
@@ -158,6 +158,14 @@ func upgrade(conn net.Conn, u *url.URL, hello protocol.Hello) (net.Conn, error) 
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", protocol.UpgradeProto)
 	hello.SetHeaders(req.Header)
+	// Who this machine is, as opposed to what it says about itself. The relay
+	// takes the id from the assertion and treats the hello headers as
+	// descriptive only.
+	for k, vs := range identity {
+		for _, v := range vs {
+			req.Header.Set(k, v)
+		}
+	}
 
 	if err := conn.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
 		return nil, err

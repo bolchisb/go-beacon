@@ -37,6 +37,15 @@ type Config struct {
 	// expiry, held instead of the password that produced it.
 	Session string `json:"session,omitempty"`
 
+	// AgentKey is this machine's private key, generated here at install and
+	// never sent anywhere. Losing it means re-enrolling; leaking it means
+	// someone can impersonate this agent and only this agent.
+	AgentKey string `json:"agent_key,omitempty"`
+
+	// Assertion is the relay's Vault-signed statement binding AgentKey's public
+	// half to this agent's id, until it expires.
+	Assertion string `json:"assertion,omitempty"`
+
 	// AutoUpdate is a pointer so that an absent field means enabled: an agent
 	// on a machine nobody can reach must not be left behind by a config written
 	// before the setting existed.
@@ -113,6 +122,8 @@ func loadConfig(flags map[string]string) (*resolved, error) {
 		r.set(keyToken, fc.Token, fromFile)
 		r.set(keyUser, fc.Username, fromFile)
 		r.Session = fc.Session
+		r.AgentKey = fc.AgentKey
+		r.Assertion = fc.Assertion
 	}
 
 	r.set(keyServer, os.Getenv("BEACON_SERVER"), fromEnv)

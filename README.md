@@ -18,12 +18,11 @@ relay holds that connection open and multiplexes everything over it. Developers
 work against the customer's real environment from their own workstation, and when
 a defect only reproduces there, the same tunnel is the debugging channel.
 
-> [!WARNING]
-> **Agents are not yet authenticated.** Operator access to the dashboard, the API
-> and the MCP endpoint is gated once an operator token is configured, but nothing
-> yet stops a stranger's agent from registering itself with your relay. Until
-> that lands, keep the relay on a private interface or behind an authenticating
-> proxy. See [Security](#security) before deploying.
+> [!IMPORTANT]
+> Nothing reaches this relay unauthenticated. Operators sign in with a username
+> and password; agents prove themselves with a key generated on their own
+> machine and a statement the relay's Vault signed for it. Read
+> [Security](#security) for what that does and does not cover.
 
 > [!IMPORTANT]
 > go-beacon is **source-available, not open source**. It is free for private
@@ -58,7 +57,7 @@ a defect only reproduces there, the same tunnel is the debugging channel.
 | Ports opened on the target | None |
 | Transport security | TLS, terminated by the relay or by a proxy in front of it |
 | Operator authentication | Username and password, stored in Vault, set up on first run |
-| Agent authentication | **Not yet** — see [Security](#security) and the [roadmap](#roadmap) |
+| Agent authentication | Per-agent key, generated on the machine, bound by a Vault-signed assertion |
 | Runtime dependencies | None on the agent. The relay needs a Vault, shipped alongside it |
 | Development | AI-assisted — see [How this was built](#how-this-was-built) |
 | License | Source-available, dual-licensed |
@@ -100,8 +99,8 @@ developer workstation                relay                 target machine
 | Clipboard | Read and replace the target's clipboard | Available (Windows, macOS) |
 | Operator authentication | Username and password gating the dashboard, the API and the MCP endpoint | Available |
 | Credential backend | Vault, unsealed automatically, issuing signed agent credentials | Available |
-| Agent enrolment | One-time wrapped token at install, per-agent key generated on the machine | Planned |
-| Agent authentication | Signed assertion plus proof of possession on connect | Planned |
+| Agent enrolment | Authorised by operator credentials at install; the key is generated on the machine | Available |
+| Agent authentication | Vault-signed assertion plus a signed challenge on every connect | Available |
 | Per-operator identity | Named operators rather than one shared token | Planned |
 
 ## How this was built
@@ -170,18 +169,25 @@ file.
 opened on the target. A forwarded stream names a service, never an address, so an
 agent cannot be used as a general route into the network behind it.
 
+**Agent identity.** Each agent generates a keypair on its own machine and the
+private half never leaves it. Enrolment is authorised by an operator's username
+and password, typed once by whoever is installing, used for that one request and
+never stored on the target. What the machine keeps is a Vault-signed assertion
+binding its id to its key — an identity for itself and nothing that reaches any
+other machine.
+
+On every connection the agent signs a challenge the relay has just issued.
+Challenges are single use, so a captured handshake cannot be replayed, and the
+id comes from the assertion rather than from a header, so an enrolled machine
+cannot claim to be a different one. The relay verifies both without asking
+Vault, which is why a sealed Vault stops enrolment without disconnecting anyone.
+
 **The blast radius of a Vault outage.** The relay caches Vault's public keys, so
 a sealed or unreachable Vault stops enrolment and renewal but does not disconnect
 a fleet that is already running. That matters because the fleet is exactly the
 set of machines nobody can reach to fix.
 
 ### What is not protected yet
-
-**Agents do not authenticate.** Any process that can reach `/agent/connect` can
-register itself as an agent, including under an id that belongs to a real
-machine, and then receive the commands meant for it. Closing this is the next
-milestone; the design and its trade-offs are summarised in the
-[roadmap](#roadmap).
 
 **One shared operator token.** There is no per-operator identity, no attribution
 of who did what, and no way to revoke one person without rotating for everyone.
@@ -342,10 +348,21 @@ The same binary serves two roles, and confusing them is the most common mistake.
 Copy the binary for the target's platform out of `dist/`, then:
 
 ```sh
-beacon install --server http://relay.example.com:8080 --id build-vm-01
+beacon install --server https://relay.example.com --id build-vm-01
 ```
 
-That registers it as a system service and starts it.
+It asks for an operator username and password, enrols the machine, then
+registers it as a system service and starts it.
+
+The credentials are used for that one request and are never written to the
+machine. What stays behind is a keypair generated locally and the relay's
+signed statement that it belongs to this agent id — so a compromised target
+yields its own identity and nothing that reaches any other machine.
+
+> [!NOTE]
+> Enrolment needs the relay reachable and its Vault unsealed. An agent that is
+> already enrolled keeps connecting through a Vault outage; only enrolling a new
+> one has to wait.
 
 ### Agent commands
 
@@ -610,26 +627,19 @@ a stack trace or a connection string across:
 
 ## Roadmap
 
-Agent authentication is the next milestone, and it is being built in the open
-order below. Each step is useful on its own.
-
 | Step | What it adds |
 | --- | --- |
-| Enrolment | An operator names a new agent and gets one install command carrying a wrapped, single-use token. The agent generates its own key locally; the private half never leaves the machine. |
-| Proof of possession | The agent presents a Vault-signed assertion binding its identity to that key, and signs a fresh challenge on every connect. Nothing on the wire is replayable. |
-| Renewal | Credentials are renewed over the tunnel the agent already holds, with a bounded grace window on the renewal endpoint only, so an expiry cannot strand a machine nobody can reach. |
-| Revocation and audit | Revoke one agent without touching the rest, and a record of who enrolled what. |
+| Credential renewal | Assertions last 90 days and are re-issued by running `beacon install` again. Renewing over the tunnel the agent already holds, with a grace window on the renewal path only, would remove the visit. |
+| Revocation | Refusing one agent without waiting for its assertion to expire, and without touching the rest. |
+| Per-operator identity | Named operators rather than one shared account, so actions are attributable and one person can be removed without rotating for everyone. |
 
-Mutual TLS was the original plan for this and was **set aside deliberately**. It
-would have required terminating TLS at the relay rather than at the proxy in
-front of it, splitting the listener so browsers — which cannot present client
-certificates — still worked, and taking on a certificate lifecycle whose expiry
-is fleet-fatal on machines reachable only through the tunnel they serve. Signed
-assertions at the application layer give the same properties, including
-non-replayability, without any of that.
-
-Per-operator identity follows, replacing the single shared token with named
-operators and an audit trail.
+Mutual TLS was the original plan for agent identity and was **set aside
+deliberately**. It would have required terminating TLS at the relay rather than
+at the proxy in front of it, splitting the listener so browsers — which cannot
+present client certificates — still worked, and taking on a certificate
+lifecycle whose expiry is fleet-fatal on machines reachable only through the
+tunnel they serve. Signed assertions at the application layer give the same
+properties, including non-replayability, without any of that.
 
 ## Licensing
 

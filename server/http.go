@@ -20,27 +20,29 @@ var uiFS embed.FS
 // Server wires the two audiences together on one port: the dashboard under
 // /ui and /api, the agents under /agent/connect.
 type Server struct {
-	cfg       Config
-	registry  *Registry
-	events    *EventBus
-	mcp       *mcp.Server
-	auth      *auth
-	vault     *vault
-	ops       *operatorStore
-	startedAt time.Time
+	cfg        Config
+	registry   *Registry
+	events     *EventBus
+	mcp        *mcp.Server
+	auth       *auth
+	vault      *vault
+	ops        *operatorStore
+	challenges *challenges
+	startedAt  time.Time
 }
 
 func newServer(cfg Config) *Server {
 	v := newVault(cfg)
 	ops := newOperatorStore(v, cfg.StateDir)
 	s := &Server{
-		cfg:       cfg,
-		registry:  newRegistry(),
-		events:    newEventBus(),
-		auth:      newAuth(cfg.AdminToken, ops),
-		vault:     v,
-		ops:       ops,
-		startedAt: time.Now(),
+		cfg:        cfg,
+		registry:   newRegistry(),
+		events:     newEventBus(),
+		auth:       newAuth(cfg.AdminToken, ops),
+		vault:      v,
+		ops:        ops,
+		challenges: newChallenges(),
+		startedAt:  time.Now(),
 	}
 	s.mcp = newMCPServer(s)
 	return s
@@ -51,6 +53,11 @@ func (s *Server) routes() http.Handler {
 
 	// agent tunnel
 	mux.HandleFunc(protocol.ConnectPath, s.handleAgentConnect)
+	mux.HandleFunc("GET "+protocol.ChallengePath, s.handleAgentChallenge)
+
+	// Enrolment. Open to reach, but it proves nothing on its own: it checks
+	// operator credentials in the body before it will sign anything.
+	mux.HandleFunc("POST "+protocol.EnrollPath, s.handleEnroll)
 
 	// dashboard API
 	mux.HandleFunc("GET /api/server", s.handleServerInfo)
@@ -98,6 +105,7 @@ type serverInfo struct {
 	AgentsKnown   int     `json:"agents_known"`
 	AuthEnabled   bool    `json:"auth_enabled"`
 	Operator      string  `json:"operator,omitempty"`
+	Vault         string  `json:"vault"`
 }
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +117,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		AgentsKnown:   total,
 		AuthEnabled:   s.auth.enabled(),
 		Operator:      s.operatorName(),
+		Vault:         string(s.vault.SealStatus()),
 	})
 }
 
@@ -216,6 +225,17 @@ func writeSSE(w io.Writer, e Event) error {
 	}
 	_, err = fmt.Fprintf(w, "data: %s\n\n", payload)
 	return err
+}
+
+// decodeJSON reads a request body with a bound on its size, so a malformed or
+// hostile caller cannot make the relay allocate without limit.
+func decodeJSON(r *http.Request, v any) error {
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("could not read the request: %w", err)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

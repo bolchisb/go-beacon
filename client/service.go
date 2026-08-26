@@ -24,6 +24,7 @@ func cmdInstall(args []string) error {
 	fs.String(keyServer, "", "relay URL, http:// or https://")
 	fs.String(keyID, "", "agent identity shown in the dashboard")
 	fs.String(keyCA, "", "PEM bundle trusted in addition to the system roots")
+	fs.String(keyUser, "", "operator username to enrol this machine with")
 	dryRun := fs.Bool("dry-run", false, "print what would be done and change nothing")
 	fs.Usage = func() {
 		usageFor(fs, "beacon install --server URL", "Install the agent as a system service.")
@@ -44,6 +45,12 @@ func cmdInstall(args []string) error {
 	}
 
 	if err := requireElevation(); err != nil {
+		return err
+	}
+
+	// Enrolment first: it needs a human, and failing here should leave the
+	// machine untouched rather than half installed.
+	if err := enrollThisMachine(cfg); err != nil {
 		return err
 	}
 
@@ -75,6 +82,7 @@ func cmdInstall(args []string) error {
 	p.kv("config", configPath())
 	p.kv("relay", cfg.Server)
 	p.kv("agent id", cfg.AgentID)
+	p.kv("enrolled", "yes")
 	p.kv("service", serviceStateText(settled(true)))
 	p.footer = "beacon status"
 	p.show()
@@ -248,4 +256,43 @@ func copyExecutable(target string) error {
 		defer os.Remove(target + ".old")
 	}
 	return os.WriteFile(target, data, 0o755)
+}
+
+// enrollThisMachine generates this machine's keypair if it has none and trades
+// an operator's credentials for an assertion binding it to this agent id.
+//
+// The credentials are typed here, used for one request, and dropped. What stays
+// on the machine is its own private key and the assertion -- an identity for
+// this agent and nothing that reaches any other.
+func enrollThisMachine(cfg *resolved) error {
+	priv, err := ensureKeypair(&cfg.Config)
+	if err != nil {
+		return err
+	}
+
+	if cfg.Assertion != "" {
+		fmt.Println("  already enrolled; re-enrolling to refresh the assertion")
+	}
+
+	username := cfg.Username
+	if username == "" {
+		fmt.Printf("\nEnrolling %s with %s\n", cfg.AgentID, cfg.Server)
+		if username, err = prompt("Operator username: "); err != nil {
+			return err
+		}
+	}
+	password, err := promptPassword("Operator password: ")
+	if err != nil {
+		return err
+	}
+
+	step("enrolling with the relay")
+	assertion, err := enroll(cfg.Server, cfg.CAFile, username, password,
+		cfg.AgentID, publicKeyOf(priv))
+	if err != nil {
+		return fmt.Errorf("enrolment failed: %w", err)
+	}
+	cfg.Assertion = assertion
+	cfg.Username = username
+	return nil
 }

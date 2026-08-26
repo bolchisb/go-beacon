@@ -371,3 +371,68 @@ func (v *vault) kvPut(path string, in any) error {
 	return v.call(http.MethodPost, kvMount+"/data/"+path,
 		map[string]any{"data": in}, nil, true)
 }
+
+// ---- seal status -----------------------------------------------------------
+
+// SealState is what the dashboard shows. Deliberately coarse: an operator needs
+// to know whether enrolment will work right now, not Vault's internals.
+type SealState string
+
+const (
+	SealUnsealed    SealState = "unsealed"
+	SealSealed      SealState = "sealed"
+	SealUnreachable SealState = "unreachable"
+	SealAbsent      SealState = "not configured"
+)
+
+// sealStatusTTL keeps the dashboard's polling off Vault's back. The dashboard
+// refreshes every couple of seconds and this state changes rarely.
+const sealStatusTTL = 5 * time.Second
+
+type sealCache struct {
+	mu    sync.Mutex
+	state SealState
+	at    time.Time
+}
+
+var seal sealCache
+
+// SealStatus reports whether Vault is reachable and open.
+//
+// sys/seal-status needs no token, which matters: this has to answer while the
+// relay's own credential is unusable, since a sealed Vault is exactly when the
+// relay cannot authenticate to it.
+func (v *vault) SealStatus() SealState {
+	if !v.configured() {
+		return SealAbsent
+	}
+
+	seal.mu.Lock()
+	if time.Since(seal.at) < sealStatusTTL && seal.state != "" {
+		s := seal.state
+		seal.mu.Unlock()
+		return s
+	}
+	seal.mu.Unlock()
+
+	state := SealUnreachable
+	var out struct {
+		Sealed      bool `json:"sealed"`
+		Initialized bool `json:"initialized"`
+	}
+	if err := v.call(http.MethodGet, "sys/seal-status", nil, &out, false); err == nil {
+		switch {
+		case !out.Initialized:
+			state = SealSealed
+		case out.Sealed:
+			state = SealSealed
+		default:
+			state = SealUnsealed
+		}
+	}
+
+	seal.mu.Lock()
+	seal.state, seal.at = state, time.Now()
+	seal.mu.Unlock()
+	return state
+}

@@ -67,8 +67,17 @@ initialise() {
   log "initialising: $SHARES shares, threshold $THRESHOLD"
   mkdir -p "$(dirname "$KEYFILE")"
   umask 077
-  vault operator init -format=json \
-    -key-shares="$SHARES" -key-threshold="$THRESHOLD" >"$KEYFILE"
+  # Checked rather than trusted: this function is called as `initialise || ...`,
+  # which switches set -e off for everything inside it. An unwritable $KEYFILE
+  # -- a volume the container's user does not own -- otherwise failed here and
+  # still reported success two lines down, sending the reader after the wrong
+  # problem entirely.
+  if ! vault operator init -format=json \
+      -key-shares="$SHARES" -key-threshold="$THRESHOLD" >"$KEYFILE"; then
+    log "initialisation failed, or $KEYFILE could not be written."
+    log "The volume holding it must be writable by uid $(id -u)."
+    return 1
+  fi
   chmod 600 "$KEYFILE"
   log "keys written to $KEYFILE"
   log "BACK THIS UP somewhere that is not the Vault data volume, and keep it"
