@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 )
 
 // shipQueue is small on purpose. If the relay stops draining, dropping old
@@ -34,7 +35,7 @@ type logHandler struct {
 
 func newLogHandler(base slog.Handler) *logHandler {
 	sink := &logSink{lines: make(chan protocol.LogLine, shipQueue)}
-	go sink.run()
+	supervise.Go("log-sink", sink.run)
 	return &logHandler{base: base, sink: sink}
 }
 

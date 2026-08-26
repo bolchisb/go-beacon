@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/charmbracelet/x/term"
 	"github.com/coder/websocket"
 )
@@ -85,7 +86,7 @@ func cmdSSH(args []string) error {
 	stopWatching := watchResize(w.resize)
 	defer stopWatching()
 
-	go func() {
+	supervise.Go("ssh-stdin", func() {
 		buf := make([]byte, 4096)
 		for {
 			n, err := os.Stdin.Read(buf)
@@ -98,7 +99,7 @@ func cmdSSH(args []string) error {
 				return
 			}
 		}
-	}()
+	})
 
 	// the agent answers with raw terminal output, so this end parses nothing
 	_, err = io.Copy(os.Stdout, conn)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/coder/websocket"
 )
 
@@ -56,9 +57,9 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 
 	ws := websocket.NetConn(r.Context(), c, websocket.MessageBinary)
 
-	go func() {
+	supervise.Go("forward-pump:"+id, func() {
 		io.Copy(stream, ws)
 		stream.Close()
-	}()
+	})
 	io.Copy(ws, stream)
 }

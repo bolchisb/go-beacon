@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -16,7 +17,7 @@ const resizePollInterval = 500 * time.Millisecond
 func watchResize(onChange func()) func() {
 	done := make(chan struct{})
 
-	go func() {
+	supervise.Go("winsize", func() {
 		lastCols, lastRows, _ := term.GetSize(os.Stdout.Fd())
 		t := time.NewTicker(resizePollInterval)
 		defer t.Stop()
@@ -33,7 +34,7 @@ func watchResize(onChange func()) func() {
 				return
 			}
 		}
-	}()
+	})
 
 	return func() { close(done) }
 }

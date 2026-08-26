@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 )
 
 // The dial is bounded; the connection itself is not. A remote desktop session
@@ -95,7 +96,9 @@ func pipeStream(stream net.Conn, br *bufio.Reader, local net.Conn) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); defer shut(); io.Copy(local, br) }()
-	go func() { defer wg.Done(); defer shut(); io.Copy(stream, local) }()
+	// wg.Done runs even if a copy panics: deferred calls unwind before the
+	// supervisor recovers, so Wait cannot be left hanging.
+	supervise.Go("forward-in", func() { defer wg.Done(); defer shut(); io.Copy(local, br) })
+	supervise.Go("forward-out", func() { defer wg.Done(); defer shut(); io.Copy(stream, local) })
 	wg.Wait()
 }

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -71,14 +72,14 @@ func (windowsService) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- s
 	defer cancel()
 
 	done := make(chan struct{})
-	go func() {
+	supervise.Go("windows-service", func() {
 		defer close(done)
 		cfg, err := loadConfig(nil)
 		if err != nil {
 			return
 		}
 		runAgent(ctx, cfg)
-	}()
+	})
 
 	s <- svc.Status{State: svc.Running, Accepts: accepted}
 	for {

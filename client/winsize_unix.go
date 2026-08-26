@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,7 +16,7 @@ func watchResize(onChange func()) func() {
 	signal.Notify(ch, syscall.SIGWINCH)
 
 	done := make(chan struct{})
-	go func() {
+	supervise.Go("winsize", func() {
 		for {
 			select {
 			case <-ch:
@@ -24,7 +25,7 @@ func watchResize(onChange func()) func() {
 				return
 			}
 		}
-	}()
+	})
 
 	return func() {
 		signal.Stop(ch)

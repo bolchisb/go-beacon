@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/hashicorp/yamux"
 )
 
@@ -45,16 +46,16 @@ func runSession(ctx context.Context, server string, hello protocol.Hello, tlsCfg
 	// the session rather than outliving it
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
+	supervise.Go("session-shutdown", func() {
 		select {
 		case <-ctx.Done():
 			sess.Close()
 		case <-done:
 		}
-	}()
+	})
 
 	st.connected(sess, counted)
-	go pingLoop(st, sess)
+	supervise.Go("ping", func() { pingLoop(st, sess) })
 
 	if logStream, err := sess.OpenStream(); err == nil {
 		if protocol.WriteStreamHeader(logStream, protocol.StreamLog) == nil && shipper != nil {
@@ -72,7 +73,7 @@ func runSession(ctx context.Context, server string, hello protocol.Hello, tlsCfg
 		if err != nil {
 			return err
 		}
-		go handleStream(stream)
+		supervise.Go("stream", func() { handleStream(stream) })
 	}
 }
 

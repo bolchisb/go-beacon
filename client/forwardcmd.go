@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/bolchisb/go-beacon/internal/protocol"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/coder/websocket"
 )
 
@@ -72,10 +73,10 @@ func cmdForward(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
+	supervise.Go("forward-shutdown", func() {
 		<-ctx.Done()
 		ln.Close()
-	}()
+	})
 
 	for {
 		local, err := ln.Accept()
@@ -86,7 +87,7 @@ func cmdForward(args []string) error {
 			}
 			return err
 		}
-		go bridge(ctx, local, target, tlsCfg)
+		supervise.Go("forward-session", func() { bridge(ctx, local, target, tlsCfg) })
 	}
 }
 
@@ -124,7 +125,7 @@ func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Conf
 	shut := func() { once.Do(func() { local.Close(); c.CloseNow() }) }
 	defer shut()
 
-	go func() {
+	supervise.Go("forward-upstream", func() {
 		io.Copy(remote, local)
 		// The client may only be done sending. Half-closing here lets the far
 		// side finish replying; tearing the session down would drop whatever
@@ -132,7 +133,7 @@ func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Conf
 		if tcp, ok := local.(*net.TCPConn); ok {
 			tcp.CloseRead()
 		}
-	}()
+	})
 
 	// ends when the far side closes, or when the client is gone and writing
 	// to it fails

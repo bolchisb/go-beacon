@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"log/slog"
 	"net/http"
 	"os"
@@ -58,10 +59,10 @@ func runServer(cfg Config) error {
 	defer stop()
 
 	errCh := make(chan error, 1)
-	go func() {
+	supervise.Go("http-listener", func() {
 		slog.Info("beacon server listening", "addr", cfg.Listen, "version", version)
 		errCh <- httpSrv.ListenAndServe()
-	}()
+	})
 
 	select {
 	case err := <-errCh:
