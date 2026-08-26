@@ -353,24 +353,47 @@ func (a *auth) serveSignIn(w http.ResponseWriter, status int, message string) {
 }
 
 // Deliberately self-contained: no asset from /ui is served before sign-in.
+//
+// The palette matches the dashboard's rather than following the system theme.
+// Signing in and then landing on a differently-coloured page reads as two
+// applications.
 const pageShell = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>beacon</title>
 <style>
- :root { color-scheme: light dark; }
- body { font: 15px/1.5 system-ui, sans-serif; display: grid; place-items: center;
-        min-height: 100vh; margin: 0; }
- form { display: grid; gap: .75rem; width: min(22rem, 90vw); }
- h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
- p.hint { margin: 0; font-size: .85rem; opacity: .75; }
- input { font: inherit; padding: .5rem .6rem; border: 1px solid #8888;
-         border-radius: 6px; background: transparent; color: inherit; }
- button { font: inherit; padding: .5rem; border: 0; border-radius: 6px;
-          background: #2563eb; color: #fff; cursor: pointer; }
- .note { color: #b91c1c; margin: 0; font-size: .9rem; }
- details { font-size: .85rem; opacity: .8; }
- summary { cursor: pointer; }
+ :root {
+   --bg: #0e1116; --panel: #161b22; --line: #262d36;
+   --fg: #d7dee7; --muted: #8b96a3; --accent: #58a6ff; --down: #f85149;
+ }
+ * { box-sizing: border-box; }
+ body {
+   margin: 0; min-height: 100vh;
+   display: grid;
+   /* place-content, not place-items: the latter centres each child on its own
+      row and leaves the group stretched down the page. */
+   place-content: center;
+   gap: 1rem;
+   padding: 2rem 1rem;
+   background: var(--bg); color: var(--fg);
+   font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+ h1 { margin: 0; font-size: 1rem; letter-spacing: .12em; text-transform: uppercase; }
+ form { display: grid; gap: .7rem; width: min(20rem, 100%%); }
+ input {
+   font: inherit; padding: .55rem .65rem; color: var(--fg);
+   background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+ }
+ input:focus { outline: 0; border-color: var(--accent); }
+ button {
+   font: inherit; font-weight: 600; padding: .55rem; border: 0; border-radius: 5px;
+   background: var(--accent); color: #06121f; cursor: pointer;
+ }
+ p.hint { margin: 0; font-size: .8rem; color: var(--muted); }
+ .note { margin: 0; font-size: .85rem; color: var(--down); }
+ details { font-size: .82rem; color: var(--muted); width: min(20rem, 100%%); }
+ summary { cursor: pointer; padding: .2rem 0; }
+ details form { margin-top: .6rem; }
 </style>
 <h1>%s</h1>
 %s
