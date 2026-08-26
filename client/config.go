@@ -22,7 +22,20 @@ type Config struct {
 	// `beacon ssh` and `beacon forward` go through. The agent tunnel does not
 	// use it -- that path authenticates on its own terms -- so a target machine
 	// has no reason to carry one and only a workstation needs it set.
+	//
+	// This is the relay's admin token, which is also its recovery credential.
+	// Prefer `beacon login`: it trades the operator password for a session and
+	// stores only that, so the password never lands on disk and what does is
+	// short-lived.
 	Token string `json:"token,omitempty"`
+
+	// Username is remembered so `beacon login` only has to ask for a password.
+	// It is not a secret.
+	Username string `json:"username,omitempty"`
+
+	// Session is what `beacon login` obtains: a signed cookie with its own
+	// expiry, held instead of the password that produced it.
+	Session string `json:"session,omitempty"`
 
 	// AutoUpdate is a pointer so that an absent field means enabled: an agent
 	// on a machine nobody can reach must not be left behind by a config written
@@ -53,9 +66,12 @@ const (
 	keyID     = "id"
 	keyCA     = "ca-file"
 	keyToken  = "token"
+	keyUser   = "user"
 )
 
-var configKeys = []string{keyServer, keyID, keyCA, keyToken}
+// Session is deliberately absent: it is obtained by `beacon login` and expires
+// on its own, so it is not something to set by hand or report as a setting.
+var configKeys = []string{keyServer, keyID, keyCA, keyToken, keyUser}
 
 type resolved struct {
 	Config
@@ -95,12 +111,15 @@ func loadConfig(flags map[string]string) (*resolved, error) {
 		r.set(keyID, fc.AgentID, fromFile)
 		r.set(keyCA, fc.CAFile, fromFile)
 		r.set(keyToken, fc.Token, fromFile)
+		r.set(keyUser, fc.Username, fromFile)
+		r.Session = fc.Session
 	}
 
 	r.set(keyServer, os.Getenv("BEACON_SERVER"), fromEnv)
 	r.set(keyID, os.Getenv("BEACON_AGENT_ID"), fromEnv)
 	r.set(keyCA, os.Getenv("BEACON_CA_FILE"), fromEnv)
 	r.set(keyToken, os.Getenv("BEACON_TOKEN"), fromEnv)
+	r.set(keyUser, os.Getenv("BEACON_USER"), fromEnv)
 
 	for k, v := range flags {
 		r.set(k, v, fromFlag)
@@ -122,6 +141,8 @@ func (r *resolved) set(key, value string, src source) {
 		r.CAFile = value
 	case keyToken:
 		r.Token = value
+	case keyUser:
+		r.Username = value
 	default:
 		return
 	}
@@ -143,21 +164,38 @@ func (r *resolved) value(key string) string {
 		return r.CAFile
 	case keyToken:
 		return r.Token
+	case keyUser:
+		return r.Username
 	}
 	return ""
 }
 
 // apiHeader carries the operator credential on requests to the relay's API.
-// Nil when there is no token, which keeps the header absent rather than empty
-// on a relay that has no gate.
-func apiHeader(token string) http.Header {
-	if token == "" {
+//
+// A session from `beacon login` is preferred over the admin token: it is what
+// the operator's own username and password produce, it expires on its own, and
+// it leaves the relay's recovery credential on the relay. The token stays
+// supported for scripts and for a relay that has no account yet.
+//
+// Nil when there is neither, which keeps the header absent rather than empty on
+// a relay that has no gate at all.
+func apiHeader(token, session string) http.Header {
+	h := http.Header{}
+	switch {
+	case session != "":
+		h.Add("Cookie", sessionCookieName+"="+session)
+	case token != "":
+		h.Set("Authorization", "Bearer "+token)
+	default:
 		return nil
 	}
-	h := http.Header{}
-	h.Set("Authorization", "Bearer "+token)
 	return h
 }
+
+// sessionCookieName matches what the relay sets. Kept here rather than shared
+// through internal/protocol: it is an HTTP detail of the dashboard, not part of
+// the wire contract between an agent and the relay.
+const sessionCookieName = "beacon_session"
 
 func readConfigFile(path string) (Config, bool, error) {
 	data, err := os.ReadFile(path)

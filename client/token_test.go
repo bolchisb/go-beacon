@@ -1,20 +1,37 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestAPIHeaderIsAbsentWithoutAToken(t *testing.T) {
-	// A relay with no gate should see no Authorization header at all, rather
-	// than an empty one it then has to decide what to do with.
-	if h := apiHeader(""); h != nil {
+func TestAPIHeaderCarriesWhicheverCredentialExists(t *testing.T) {
+	// A relay with no gate should see no credential header at all, rather than
+	// an empty one it then has to decide what to do with.
+	if h := apiHeader("", ""); h != nil {
 		t.Errorf("got %v, want no header", h)
 	}
-	h := apiHeader("s3cret")
-	if got := h.Get("Authorization"); got != "Bearer s3cret" {
+
+	if got := apiHeader("s3cret", "").Get("Authorization"); got != "Bearer s3cret" {
 		t.Errorf("got %q, want a bearer header", got)
+	}
+
+	if got := apiHeader("", "sess").Get("Cookie"); got != sessionCookieName+"=sess" {
+		t.Errorf("got %q, want a session cookie", got)
+	}
+
+	// A session comes from the operator's own password and expires on its own,
+	// so it should win over the relay's admin token when both are present.
+	both := apiHeader("s3cret", "sess")
+	if both.Get("Cookie") == "" {
+		t.Error("the session was not sent")
+	}
+	if both.Get("Authorization") != "" {
+		t.Error("the admin token was sent alongside a session")
 	}
 }
 
@@ -69,5 +86,48 @@ func TestTokenIsReportedByConfigShow(t *testing.T) {
 	}
 	if r.value(keyToken) != "t" {
 		t.Errorf("value(token) is %q, want t", r.value(keyToken))
+	}
+}
+
+func TestLoginReturnsTheSessionCookie(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if r.FormValue("username") != "alice" || r.FormValue("password") != "hunter2" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "the-session"})
+		// The relay redirects a browser after a successful sign-in; the client
+		// must read the response that carries the cookie rather than follow it.
+		w.Header().Set("Location", "/ui/")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	got, err := login(srv.URL, "", "alice", "hunter2")
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	if got != "the-session" {
+		t.Errorf("session is %q, want the cookie value", got)
+	}
+
+	if _, err := login(srv.URL, "", "alice", "wrong"); err == nil {
+		t.Error("bad credentials were accepted")
+	}
+}
+
+func TestLoginSaysSoWhenThereIsNoAccountYet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, err := login(srv.URL, "", "alice", "hunter2")
+	if err == nil || !strings.Contains(err.Error(), "no operator account") {
+		t.Errorf("got %v, want a message pointing at the dashboard", err)
 	}
 }

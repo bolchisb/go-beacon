@@ -88,25 +88,24 @@ func cmdForward(args []string) error {
 			}
 			return err
 		}
-		supervise.Go("forward-session", func() { bridge(ctx, local, target, tlsCfg, cfg.Token) })
+		supervise.Go("forward-session", func() { bridge(ctx, local, target, tlsCfg, cfg.Token, cfg.Session) })
 	}
 }
 
 // bridge carries one accepted connection over its own WebSocket. One
 // connection per session keeps a failure local to the session that caused it.
-func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Config, token string) {
+func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Config, token, session string) {
 	defer local.Close()
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
 	c, resp, err := websocket.Dial(ctx, target, &websocket.DialOptions{
 		HTTPClient: client,
-		HTTPHeader: apiHeader(token),
+		HTTPHeader: apiHeader(token, session),
 	})
 	if err != nil {
 		if resp != nil {
 			if resp.StatusCode == http.StatusUnauthorized {
-				slog.Warn("forward: the relay wants an operator token; " +
-					"set one with `beacon config set token=...`, or pass --token")
+				slog.Warn("forward: not signed in: run `beacon login`")
 			} else {
 				slog.Warn("forward: relay refused the session", "status", resp.Status)
 			}
