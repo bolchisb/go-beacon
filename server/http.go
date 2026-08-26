@@ -105,6 +105,7 @@ type serverInfo struct {
 	AgentsKnown   int     `json:"agents_known"`
 	AuthEnabled   bool    `json:"auth_enabled"`
 	Operator      string  `json:"operator,omitempty"`
+	Vault         string  `json:"vault"`
 }
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +117,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		AgentsKnown:   total,
 		AuthEnabled:   s.auth.enabled(),
 		Operator:      s.operatorName(),
+		Vault:         string(s.vault.SealStatus()),
 	})
 }
 

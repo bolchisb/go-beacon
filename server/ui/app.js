@@ -212,10 +212,40 @@ async function refresh() {
     // Empty until an operator account exists, which keeps the header quiet on
     // a relay that has not been set up yet.
     $('#stat-operator').textContent = info.operator || '';
-    $('#account').hidden = !info.operator;
+    // No account, nothing to change: the button would only lead to a form that
+    // cannot succeed.
+    $('#account-open').hidden = !info.operator;
+    renderVault(info.vault);
   } catch (err) {
     // the SSE indicator already reports that the server is unreachable
   }
+}
+
+// renderVault says whether enrolling an agent will work right now. An operator
+// does not need Vault's internals, only whether the door is open.
+function renderVault(state) {
+  const el = $('#stat-vault');
+  const label = {
+    unsealed: 'vault open',
+    sealed: 'vault sealed',
+    unreachable: 'vault unreachable',
+    'not configured': 'no vault',
+  };
+  const cls = {
+    unsealed: 'unsealed',
+    sealed: 'sealed',
+    unreachable: 'unreachable',
+    'not configured': 'absent',
+  };
+  const title = {
+    unsealed: 'Vault is open. Agents can be enrolled.',
+    sealed: 'Vault is sealed. Connected agents keep working; new ones cannot be enrolled.',
+    unreachable: 'The relay cannot reach Vault. Connected agents keep working; new ones cannot be enrolled.',
+    'not configured': 'No Vault is configured for this relay.',
+  };
+  el.textContent = label[state] || 'vault ?';
+  el.className = 'vault ' + (cls[state] || '');
+  el.title = title[state] || '';
 }
 
 function connectEvents() {
@@ -234,18 +264,43 @@ connectEvents();
 refresh();
 setInterval(refresh, REFRESH_MS);
 
-// ---- account -----------------------------------------------------------
-// The endpoint takes a form body, so this posts one rather than JSON, and it
-// re-asks for the current password: a borrowed session should not be enough to
-// lock the real operator out.
+// ---- account dialog ----------------------------------------------------
+// <dialog> handles centring, the backdrop and Esc. What is left is opening it,
+// posting the form, and not closing on failure -- a dialog that vanishes while
+// showing why it failed is worse than one that stays.
+const accountDialog = document.getElementById('account');
 const passwordForm = document.getElementById('password-form');
-if (passwordForm) {
-  passwordForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const note = document.getElementById('password-note');
-    note.className = '';
-    note.textContent = 'Saving\u2026';
+const passwordNote = document.getElementById('password-note');
 
+function openAccount() {
+  passwordForm.reset();
+  passwordNote.className = '';
+  passwordNote.textContent = '';
+  accountDialog.showModal();
+}
+
+function closeAccount() {
+  accountDialog.close();
+}
+
+document.getElementById('account-open').addEventListener('click', openAccount);
+document.getElementById('account-close').addEventListener('click', closeAccount);
+document.getElementById('account-cancel').addEventListener('click', closeAccount);
+
+// Clicking the backdrop closes it. The dialog element itself covers only the
+// panel, so a click landing on it directly means the click was outside.
+accountDialog.addEventListener('click', (e) => {
+  if (e.target === accountDialog) closeAccount();
+});
+
+passwordForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const submit = document.getElementById('password-submit');
+  submit.disabled = true;
+  passwordNote.className = '';
+  passwordNote.textContent = 'Saving\u2026';
+
+  try {
     const res = await fetch('/api/operator/password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -254,12 +309,18 @@ if (passwordForm) {
     const body = await res.json().catch(() => ({}));
 
     if (res.ok) {
-      note.className = 'ok';
-      note.textContent = 'Changed. Other sessions are signed out.';
+      passwordNote.className = 'ok';
+      passwordNote.textContent = 'Changed.';
       passwordForm.reset();
+      setTimeout(closeAccount, 900);
     } else {
-      note.className = 'err';
-      note.textContent = body.error || 'Could not change the password.';
+      passwordNote.className = 'err';
+      passwordNote.textContent = body.error || 'Could not change the password.';
     }
-  });
-}
+  } catch (err) {
+    passwordNote.className = 'err';
+    passwordNote.textContent = 'The relay did not answer.';
+  } finally {
+    submit.disabled = false;
+  }
+});

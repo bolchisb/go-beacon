@@ -16,7 +16,9 @@
     <span>uptime <b id="stat-uptime">&mdash;</b></span>
     <span>v<b id="stat-version">&mdash;</b></span>
     <span id="stat-link" class="down">disconnected</span>
+    <span id="stat-vault" class="vault" title="Vault seal state">vault &mdash;</span>
     <span id="stat-operator" class="operator"></span>
+    <button type="button" id="account-open" hidden>Account</button>
   </div>
 </header>
 
@@ -41,21 +43,38 @@
     <ul id="events"></ul>
   </section>
 
-  <section id="account">
-    <h2>Account</h2>
-    <form id="password-form" autocomplete="off">
-      <input type="password" name="current_password" placeholder="Current password"
-             autocomplete="current-password" required>
-      <input type="password" name="password" placeholder="New password (12+ recommended)"
-             autocomplete="new-password" required>
-      <input type="password" name="password_confirm" placeholder="Repeat the new password"
-             autocomplete="new-password" required>
-      <button type="submit">Change password</button>
-      <span id="password-note"></span>
-    </form>
-    <p class="hint">Changing the password signs out every other session.</p>
-  </section>
 </main>
+
+<dialog id="account">
+  <form id="password-form" autocomplete="off" method="dialog">
+    <header>
+      <h2>Change password</h2>
+      <button type="button" id="account-close" aria-label="Close">&times;</button>
+    </header>
+
+    <label>
+      Current password
+      <input type="password" name="current_password" autocomplete="current-password" required>
+    </label>
+    <label>
+      New password
+      <input type="password" name="password" placeholder="12+ recommended"
+             autocomplete="new-password" required>
+    </label>
+    <label>
+      Repeat the new password
+      <input type="password" name="password_confirm" autocomplete="new-password" required>
+    </label>
+
+    <p class="hint">Every other session is signed out. Yours stays open.</p>
+    <p id="password-note" role="status"></p>
+
+    <footer>
+      <button type="button" class="ghost" id="account-cancel">Cancel</button>
+      <button type="submit" id="password-submit">Change password</button>
+    </footer>
+  </form>
+</dialog>
 
 <script src="app.js"></script>
 </body>
