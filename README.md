@@ -19,10 +19,11 @@ work against the customer's real environment from their own workstation, and whe
 a defect only reproduces there, the same tunnel is the debugging channel.
 
 > [!WARNING]
-> **The relay is currently unauthenticated.** Anyone who can reach it has command
-> execution on every connected machine. Bind it to loopback or a private
-> interface and do not publish it on a routable address. See
-> [Security](#security) before deploying.
+> **Agents are not yet authenticated.** Operator access to the dashboard, the API
+> and the MCP endpoint is gated once an operator token is configured, but nothing
+> yet stops a stranger's agent from registering itself with your relay. Until
+> that lands, keep the relay on a private interface or behind an authenticating
+> proxy. See [Security](#security) before deploying.
 
 > [!IMPORTANT]
 > go-beacon is **source-available, not open source**. It is free for private
@@ -38,6 +39,7 @@ a defect only reproduces there, the same tunnel is the debugging channel.
 - [Security](#security)
 - [Requirements](#requirements)
 - [Running the relay](#running-the-relay)
+  - [Operator authentication](#operator-authentication)
 - [Roles: target machine and workstation](#roles-target-machine-and-workstation)
 - [Installing on a target machine](#installing-on-a-target-machine)
 - [Setting up your workstation](#setting-up-your-workstation)
@@ -54,9 +56,10 @@ a defect only reproduces there, the same tunnel is the debugging channel.
 | Platforms | Windows, Linux and macOS on amd64 and arm64 |
 | Network requirement | A single outbound TCP connection from the target to the relay |
 | Ports opened on the target | None |
-| Transport security | TLS when the relay is served over HTTPS; mutual TLS is [planned](#roadmap) |
-| Authentication | **None yet** — see [Security](#security) |
-| Runtime dependencies | None |
+| Transport security | TLS, terminated by the relay or by a proxy in front of it |
+| Operator authentication | Token, exchanged for a session cookie in a browser |
+| Agent authentication | **Not yet** — see [Security](#security) and the [roadmap](#roadmap) |
+| Runtime dependencies | None on the agent. The relay needs a Vault, shipped alongside it |
 | Development | AI-assisted — see [How this was built](#how-this-was-built) |
 | License | Source-available, dual-licensed |
 
@@ -95,8 +98,11 @@ developer workstation                relay                 target machine
 | MCP bridge | Commands, files and clipboard on a target, driven by an AI assistant | Available |
 | Port forwarding | A local port that leads to a service on the target: ssh, remote desktop, or anything else it hosts | Available |
 | Clipboard | Read and replace the target's clipboard | Available (Windows, macOS) |
-| Mutual TLS | Mutual TLS between agent and relay, internal CA | Planned |
-| Per-developer authorization | Named operators, scoped to specific agents | Planned |
+| Operator authentication | Token gate on the dashboard, the API and the MCP endpoint | Available |
+| Credential backend | Vault, unsealed automatically, issuing signed agent credentials | Available |
+| Agent enrolment | One-time wrapped token at install, per-agent key generated on the machine | Planned |
+| Agent authentication | Signed assertion plus proof of possession on connect | Planned |
+| Per-operator identity | Named operators rather than one shared token | Planned |
 
 ## How this was built
 
@@ -114,10 +120,11 @@ feature costs here.
 
 **What keeps it honest.** Generated code is not shipped on trust:
 
-- The mechanisms most likely to bite are the ones under test: update and
-  rollback, process supervision, port forwarding, the ssh command path,
-  clipboard handling and config parsing. `make test` runs them; `make vet` gates
-  `go vet` and `gofmt` over the whole tree.
+- The mechanisms most likely to bite are the ones under test: the operator gate
+  and its session handling, credential loading, signature verification and key
+  rotation, update and rollback, process supervision, port forwarding, the ssh
+  command path, clipboard handling and config parsing. `make test` runs them;
+  `make vet` gates `go vet` and `gofmt` over the whole tree.
 - Hard failures get investigated to a root cause and written up rather than
   patched until the symptom disappears — an upgrade handshake race, the Windows
   auto-update path, the supervision loop. Those write-ups are kept internally.
@@ -138,55 +145,165 @@ audit or a formal review.
 
 Understand the current posture before deploying go-beacon anywhere.
 
-**What is protected.** The agent connects outbound and no port is opened on the
-target. A forwarded stream names a service, never an address, so an agent cannot
-be used as a general route into the network behind it. Traffic is encrypted
-whenever the relay is served over HTTPS, and `--ca-file` supplies a private CA
-bundle for a relay behind an internal certificate authority.
+### What is protected
 
-**What is not protected yet.** The relay does not authenticate its callers. Both
-the web terminal and the MCP endpoint grant command execution on every connected
-machine, to anyone who can reach the relay. Treat network reachability as the
-only access control that currently exists.
+**Operator access.** The dashboard, the API and the MCP endpoint all grant
+command execution on every connected machine, so all three sit behind one gate.
+It is closed by default in the sense that matters: the exemption list names the
+agent tunnel and the health probe explicitly, and anything added later is
+protected until somebody deliberately opens it.
 
-**Deployment guidance.**
+A browser exchanges the token for a session cookie. There is no session store,
+because the relay has none: the cookie carries its own expiry and an HMAC over
+it, keyed by the operator token. A restart therefore signs nobody out, and
+rotating the token invalidates every outstanding session at once — which is also
+the only revocation there is until per-operator identity lands.
 
-- Bind the relay to loopback or a private interface, as
-  [`docker-compose.prod.yml`](docker-compose.prod.yml) does by default.
-- Do not publish the relay on a routable address.
-- Place it behind an authenticating reverse proxy or a VPN if it must be reached
-  across a network boundary.
+**Credentials at rest.** The operator token is read from a mounted file rather
+than an environment variable, so it does not appear in `docker inspect`, in the
+process environment, or in anything that dumps either. The relay holds no Vault
+credential at all: Vault Agent exchanges a response-wrapped, single-use secret id
+for a short-lived token and keeps it renewed, and the relay only ever reads that
+file.
 
-Mutual TLS and per-developer authorization are the next milestone. Agent identity
-moves from the connection headers to the client certificate at that point, and
-nothing else in the relay has to change for it.
+**The agent's side of the tunnel.** The agent connects outbound and no port is
+opened on the target. A forwarded stream names a service, never an address, so an
+agent cannot be used as a general route into the network behind it.
+
+**The blast radius of a Vault outage.** The relay caches Vault's public keys, so
+a sealed or unreachable Vault stops enrolment and renewal but does not disconnect
+a fleet that is already running. That matters because the fleet is exactly the
+set of machines nobody can reach to fix.
+
+### What is not protected yet
+
+**Agents do not authenticate.** Any process that can reach `/agent/connect` can
+register itself as an agent, including under an id that belongs to a real
+machine, and then receive the commands meant for it. Closing this is the next
+milestone; the design and its trade-offs are summarised in the
+[roadmap](#roadmap).
+
+**One shared operator token.** There is no per-operator identity, no attribution
+of who did what, and no way to revoke one person without rotating for everyone.
+
+**No audit trail for operator actions.** Vault records credential issuance; the
+relay does not yet record who ran what.
+
+**Nothing here has been through a security audit.**
+
+### Deployment guidance
+
+- Set an operator token. Without one the relay starts, says so loudly in its
+  log, and serves all three surfaces to anyone who reaches it.
+- Keep the relay on a private interface, or behind an authenticating proxy, for
+  as long as agents remain unauthenticated.
+- Vault must never be reachable by agents. It is not published in the shipped
+  compose files, and it should stay that way: agents run on customer networks,
+  and exposing a Vault to them is a worse exposure than the relay itself.
 
 ## Requirements
 
 | | |
 | --- | --- |
-| Relay host | Docker and Docker Compose. No Go toolchain required. |
+| Relay host | Docker and Docker Compose. No Go toolchain required. A Vault runs alongside the relay and is started by the same compose file. |
 | Target machine | None. A single static binary, plus administrative rights to install the service. |
 | Workstation | None for the browser terminal and the MCP endpoint. The binary is needed only for `beacon ssh` and `beacon forward`. |
 | Building from source | Go 1.26 or later |
 
 ## Running the relay
 
-The relay runs in a container; no Go toolchain is required on the host.
+The relay runs in containers alongside a Vault; no Go toolchain is required on
+the host.
 
 ```sh
-make up          # build and start the relay on :8080
+make up          # build and start the relay, Vault, and the two Vault helpers
+make vault-init  # once, after the first start: create the signing key and role
 make client      # cross-compile the agent into dist/ for every platform
 make logs        # follow relay logs
-make down        # stop the relay
+make down        # stop everything
 ```
+
+`make vault-init` is idempotent and only has to be run once per deployment.
+Everything after it is automatic: Vault is initialised and unsealed on first
+start and re-opened after every restart, and the relay's own credential is
+minted, delivered wrapped, and renewed without anyone touching it.
 
 The dashboard is then at <http://127.0.0.1:8080/ui/>. `BEACON_LISTEN` (default
 `:8080`) sets the listen address.
 
-To run a published image instead of building from source, see
+Four containers make up the stack:
+
+| Container | Job |
+| --- | --- |
+| `beacon-server` | The relay itself |
+| `beacon-vault` | Stores the signing key and issues agent credentials |
+| `beacon-vault-unseal` | Watches Vault and unseals it, at boot and any time it re-seals |
+| `beacon-vault-agent` | Turns a wrapped, single-use secret id into a renewed token for the relay |
+
+To run published images instead of building from source, see
 [`docker-compose.prod.yml`](docker-compose.prod.yml) and
 [`.env.example`](.env.example).
+
+### Operator authentication
+
+The dashboard, the API and the MCP endpoint all grant command execution on every
+connected machine. One token gates all three.
+
+Create it as a file on the relay host, outside the repository so it can never be
+picked up by an image build:
+
+```sh
+sudo install -D -m 0600 /dev/null /etc/beacon/admin-token
+openssl rand -base64 32 | sudo tee /etc/beacon/admin-token >/dev/null
+```
+
+`docker-compose.prod.yml` mounts that file and points `BEACON_ADMIN_TOKEN_FILE`
+at it. A development stack can use `BEACON_ADMIN_TOKEN` directly instead; both
+work, and the file is preferred because an environment variable is visible to
+`docker inspect` and to anything that reads the process environment.
+
+> [!WARNING]
+> With neither set, the relay starts **open**. It logs a warning saying so and
+> reports `auth_enabled: false` from `/api/server`, but it will serve the
+> dashboard, the API and the MCP endpoint to anyone who reaches it.
+
+Signing in depends on what is asking:
+
+| Client | How |
+| --- | --- |
+| Browser | A sign-in form appears; the token is exchanged for a session cookie lasting 12 hours |
+| `curl`, scripts | `Authorization: Bearer <token>` |
+| An AI assistant | The same header, passed when the MCP endpoint is registered |
+
+The agent tunnel and the health probe are deliberately exempt: agents will
+authenticate on their own terms, and the container health check runs with no
+credentials to offer.
+
+Rotating the token and restarting signs every operator out immediately.
+
+### How the relay gets its own credentials
+
+Worth knowing if you operate this, and skippable otherwise.
+
+Vault holds an ed25519 signing key that never leaves it. The relay is allowed to
+ask for signatures and to read the public half — nothing else, and never the
+private key.
+
+It authenticates with none of that in its environment. The unseal supervisor,
+which already holds the root token and already runs at every boot, mints a
+**response-wrapped, single-use** secret id. Vault Agent unwraps it, logs in,
+writes a short-lived token to a file and keeps it renewed. The relay reads only
+that file, and picks up a rotated token on its next request.
+
+The wrapping matters: a wrapped token can be unwrapped exactly once. If anyone
+intercepts one in transit, the legitimate unwrap fails and Vault Agent refuses to
+start, so an interception is something you find out about rather than something
+you do not.
+
+Unsealing is scripted rather than delegated to a cloud KMS, which means the key
+shares live on the relay host, in a volume of their own, next to the data they
+open. That is a deliberate trade for keeping the deployment self-contained, and
+it means the host is part of the trust boundary.
 
 ## Roles: target machine and workstation
 
@@ -404,8 +521,12 @@ its own session through the tunnel; the relay reads none of it.
 Point the assistant at the relay's MCP endpoint:
 
 ```sh
-claude mcp add --transport http beacon http://relay.example.com:8080/mcp
+claude mcp add --transport http beacon https://relay.example.com/mcp \
+  --header "Authorization: Bearer $BEACON_ADMIN_TOKEN"
 ```
+
+The header is the same operator token the dashboard uses. Without it the
+endpoint answers `401` rather than exposing any tool.
 
 It gains seven tools, each naming the agent it should act on:
 
@@ -444,10 +565,26 @@ a stack trace or a connection string across:
 
 ## Roadmap
 
-| Milestone | Scope |
+Agent authentication is the next milestone, and it is being built in the open
+order below. Each step is useful on its own.
+
+| Step | What it adds |
 | --- | --- |
-| Mutual TLS | Mutual TLS between agent and relay, backed by an internal CA. Agent identity moves from the connection headers to the client certificate. |
-| Per-developer authorization | Named operators, scoped to specific agents. |
+| Enrolment | An operator names a new agent and gets one install command carrying a wrapped, single-use token. The agent generates its own key locally; the private half never leaves the machine. |
+| Proof of possession | The agent presents a Vault-signed assertion binding its identity to that key, and signs a fresh challenge on every connect. Nothing on the wire is replayable. |
+| Renewal | Credentials are renewed over the tunnel the agent already holds, with a bounded grace window on the renewal endpoint only, so an expiry cannot strand a machine nobody can reach. |
+| Revocation and audit | Revoke one agent without touching the rest, and a record of who enrolled what. |
+
+Mutual TLS was the original plan for this and was **set aside deliberately**. It
+would have required terminating TLS at the relay rather than at the proxy in
+front of it, splitting the listener so browsers — which cannot present client
+certificates — still worked, and taking on a certificate lifecycle whose expiry
+is fleet-fatal on machines reachable only through the tunnel they serve. Signed
+assertions at the application layer give the same properties, including
+non-replayability, without any of that.
+
+Per-operator identity follows, replacing the single shared token with named
+operators and an audit trail.
 
 ## Licensing
 
