@@ -34,6 +34,7 @@ a defect only reproduces there, the same tunnel is the debugging channel.
 - [At a glance](#at-a-glance)
 - [How it works](#how-it-works)
 - [Capabilities](#capabilities)
+- [How this was built](#how-this-was-built)
 - [Security](#security)
 - [Requirements](#requirements)
 - [Running the relay](#running-the-relay)
@@ -56,6 +57,7 @@ a defect only reproduces there, the same tunnel is the debugging channel.
 | Transport security | TLS when the relay is served over HTTPS; mutual TLS is [planned](#roadmap) |
 | Authentication | **None yet** — see [Security](#security) |
 | Runtime dependencies | None |
+| Development | AI-assisted — see [How this was built](#how-this-was-built) |
 | License | Source-available, dual-licensed |
 
 ## How it works
@@ -95,6 +97,42 @@ developer workstation                relay                 target machine
 | Clipboard | Read and replace the target's clipboard | Available (Windows, macOS) |
 | Mutual TLS | Mutual TLS between agent and relay, internal CA | Planned |
 | Per-developer authorization | Named operators, scoped to specific agents | Planned |
+
+## How this was built
+
+go-beacon is vibe-coded. It was designed and written with an AI assistant in the
+loop for most of it, and that is stated here for the same reason the security
+posture is: you should know what you are adopting.
+
+**Why that is worth something.** The capability surface in the table above —
+a cross-platform agent, native service integration on three operating systems, a
+self-updating fleet, a browser terminal, a port forwarder and an MCP bridge —
+is far more ground than a project this size would normally cover. Working this
+way is what made that scope reachable, and it is what keeps the turnaround on a
+reported bug measured in days rather than quarters. A fix costs about what a
+feature costs here.
+
+**What keeps it honest.** Generated code is not shipped on trust:
+
+- The mechanisms most likely to bite are the ones under test: update and
+  rollback, process supervision, port forwarding, the ssh command path,
+  clipboard handling and config parsing. `make test` runs them; `make vet` gates
+  `go vet` and `gofmt` over the whole tree.
+- Hard failures get investigated properly and written down rather than patched
+  until the symptom disappears. [`notes/`](notes/) carries the record — an
+  upgrade handshake race, the Windows auto-update path, the supervision loop.
+- Every release is built reproducibly from a tagged commit, refuses to build
+  from a dirty tree, and publishes `SHA256SUMS`.
+
+**What to expect.** Bugs. Particularly away from the paths that get daily use:
+unusual platforms, uncommon service configurations, the edges of the forwarding
+and update logic. This is young software and it has not been through a security
+audit or a formal review.
+
+> [!TIP]
+> Rough edges are the most useful thing you can send back. Open an issue with
+> the platform, the command and what the dashboard's event feed showed —
+> that is usually enough to reproduce it.
 
 ## Security
 
