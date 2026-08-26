@@ -24,6 +24,8 @@ type Server struct {
 	registry  *Registry
 	events    *EventBus
 	mcp       *mcp.Server
+	auth      *auth
+	vault     *vault
 	startedAt time.Time
 }
 
@@ -32,6 +34,8 @@ func newServer(cfg Config) *Server {
 		cfg:       cfg,
 		registry:  newRegistry(),
 		events:    newEventBus(),
+		auth:      newAuth(cfg.AdminToken),
+		vault:     newVault(cfg),
 		startedAt: time.Now(),
 	}
 	s.mcp = newMCPServer(s)
@@ -70,7 +74,13 @@ func (s *Server) routes() http.Handler {
 	})
 
 	mux.HandleFunc("GET /healthz", s.handleHealth)
-	return mux
+
+	// Operator sign-in. Registered on the mux like everything else, and exempt
+	// from the gate by name in auth.open rather than by living outside it.
+	mux.HandleFunc("POST /api/login", s.auth.handleLogin)
+	mux.HandleFunc("POST /api/logout", s.auth.handleLogout)
+
+	return s.auth.protect(mux)
 }
 
 type serverInfo struct {
@@ -78,6 +88,7 @@ type serverInfo struct {
 	UptimeSeconds float64 `json:"uptime_seconds"`
 	AgentsOnline  int     `json:"agents_online"`
 	AgentsKnown   int     `json:"agents_known"`
+	AuthEnabled   bool    `json:"auth_enabled"`
 }
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +98,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		UptimeSeconds: time.Since(s.startedAt).Seconds(),
 		AgentsOnline:  online,
 		AgentsKnown:   total,
+		AuthEnabled:   s.auth.enabled(),
 	})
 }
 

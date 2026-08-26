@@ -18,7 +18,7 @@ PLATFORMS ?= windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 da
 
 GH_REPO ?= bolchisb/go-beacon
 
-.PHONY: up down logs tidy vet test build client release clean
+.PHONY: up down logs tidy vet test build client release clean vault-init vault-status vault-unseal-log
 
 ## up: build and start the relay
 up:
@@ -30,6 +30,32 @@ down:
 
 logs:
 	$(COMPOSE) logs -f
+
+## vault-init: prepare Vault (transit key, policy, approle) and write .env.
+##   Idempotent. Run once after the first `make up`, then `make up` again so the
+##   relay picks the credentials up.
+vault-init:
+	@$(COMPOSE) exec -T vault-unseal sh -c '\
+	  VAULT_ADDR=http://vault:8200 \
+	  VAULT_TOKEN=$$(jq -r .root_token /unseal/unseal.json) \
+	  beacon-vault-bootstrap' >/dev/null
+	@$(COMPOSE) exec -T vault-unseal sh -c '\
+	  export VAULT_ADDR=http://vault:8200; \
+	  export VAULT_TOKEN=$$(jq -r .root_token /unseal/unseal.json); \
+	  echo "BEACON_VAULT_ROLE_ID=$$(vault read -field=role_id auth/approle/role/beacon-relay/role-id)"; \
+	  echo "BEACON_VAULT_SECRET_ID=$$(vault write -f -field=secret_id auth/approle/role/beacon-relay/secret-id)"' \
+	  > .env.vault
+	@grep -v '^BEACON_VAULT_' .env 2>/dev/null > .env.tmp || true
+	@cat .env.tmp .env.vault 2>/dev/null > .env; rm -f .env.tmp .env.vault
+	@echo "credentials written to .env -- run 'make up' again so the relay reads them"
+
+## vault-status: is Vault up and unsealed?
+vault-status:
+	@$(COMPOSE) exec -T vault vault status || true
+
+## vault-unseal-log: what the unseal supervisor has been doing
+vault-unseal-log:
+	@$(COMPOSE) logs --tail=30 vault-unseal
 
 ## tidy: resolve dependencies and write go.sum
 tidy:
