@@ -209,6 +209,10 @@ async function refresh() {
     $('#stat-known').textContent = info.agents_known;
     $('#stat-uptime').textContent = humanDuration(info.uptime_seconds);
     $('#stat-version').textContent = info.version;
+    // Empty until an operator account exists, which keeps the header quiet on
+    // a relay that has not been set up yet.
+    $('#stat-operator').textContent = info.operator || '';
+    $('#account').hidden = !info.operator;
   } catch (err) {
     // the SSE indicator already reports that the server is unreachable
   }
@@ -229,3 +233,33 @@ function connectEvents() {
 connectEvents();
 refresh();
 setInterval(refresh, REFRESH_MS);
+
+// ---- account -----------------------------------------------------------
+// The endpoint takes a form body, so this posts one rather than JSON, and it
+// re-asks for the current password: a borrowed session should not be enough to
+// lock the real operator out.
+const passwordForm = document.getElementById('password-form');
+if (passwordForm) {
+  passwordForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const note = document.getElementById('password-note');
+    note.className = '';
+    note.textContent = 'Saving\u2026';
+
+    const res = await fetch('/api/operator/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(new FormData(passwordForm)),
+    });
+    const body = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      note.className = 'ok';
+      note.textContent = 'Changed. Other sessions are signed out.';
+      passwordForm.reset();
+    } else {
+      note.className = 'err';
+      note.textContent = body.error || 'Could not change the password.';
+    }
+  });
+}

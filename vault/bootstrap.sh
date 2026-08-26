@@ -23,6 +23,9 @@ export VAULT_ADDR VAULT_TOKEN
 echo "==> transit engine"
 vault secrets enable transit 2>/dev/null || echo "    already enabled"
 
+echo "==> kv engine (holds the operator account)"
+vault secrets enable -path=secret kv-v2 2>/dev/null || echo "    already enabled"
+
 echo "==> signing key: $KEY_NAME"
 # ed25519: small signatures, fast verification, and no parameter choices to get
 # wrong. exportable stays false -- the relay never needs the private half.
@@ -43,6 +46,13 @@ path "transit/export/public-key/$KEY_NAME" {
 }
 path "transit/keys/$KEY_NAME" {
   capabilities = ["read"]
+}
+
+# The operator account: username, password hash, and the key that signs
+# session cookies. The relay reads it at startup and writes it when someone
+# sets or changes the password.
+path "secret/data/beacon/operator" {
+  capabilities = ["create", "read", "update"]
 }
 
 # Mint the response-wrapped, single-use enrolment tokens handed to a new agent.

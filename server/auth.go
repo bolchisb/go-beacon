@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -34,24 +35,53 @@ type auth struct {
 	// open. That is the behaviour every existing deployment already has, so
 	// upgrading does not lock anyone out -- but it is announced loudly at
 	// startup and reported through /api/server.
+	//
+	// Once an operator account exists the token stops being the everyday
+	// credential and becomes two other things: what authorises creating that
+	// account in the first place, and what gets you back in when both Vault and
+	// its cache are gone.
 	token []byte
+
+	ops *operatorStore
 }
 
-func newAuth(token string) *auth {
-	if token == "" {
-		return &auth{}
+func newAuth(token string, ops *operatorStore) *auth {
+	a := &auth{ops: ops}
+	if token != "" {
+		a.token = []byte(token)
 	}
-	return &auth{token: []byte(token)}
+	return a
 }
 
-func (a *auth) enabled() bool { return len(a.token) > 0 }
+func (a *auth) enabled() bool {
+	return len(a.token) > 0 || (a.ops != nil && a.ops.exists())
+}
+
+// bootstrapping reports whether the dashboard should be asking for the admin
+// token and a new username and password rather than for a login.
+func (a *auth) bootstrapping() bool {
+	return a.ops == nil || !a.ops.exists()
+}
+
+// sessionKey signs session cookies. The operator's own key once there is an
+// account, the admin token before that, so cookies work either side of setup.
+// A consequence worth knowing: changing the password with session rotation, or
+// rotating the admin token, invalidates every outstanding session.
+func (a *auth) sessionKey() []byte {
+	if a.ops != nil {
+		if rec := a.ops.current(); rec != nil && rec.SessionKey != "" {
+			return []byte(rec.SessionKey)
+		}
+	}
+	return a.token
+}
 
 // open lists the paths that must work without an operator session. The default
 // is the other way round -- anything not named here is protected -- so a route
 // added later is closed until someone deliberately opens it.
 func (a *auth) open(path string) bool {
 	switch path {
-	case protocol.ConnectPath, "/healthz", "/api/login", "/api/logout":
+	case protocol.ConnectPath, "/healthz", "/api/login", "/api/logout", "/api/bootstrap":
 		return true
 	}
 	return false
@@ -66,7 +96,7 @@ func (a *auth) protect(next http.Handler) http.Handler {
 		// A browser gets something it can act on; anything else gets 401, so a
 		// CLI or an assistant sees a status code rather than a login page.
 		if wantsHTML(r) {
-			a.serveLogin(w, http.StatusUnauthorized, "")
+			a.serveSignIn(w, http.StatusUnauthorized, "")
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="beacon"`)
@@ -99,7 +129,7 @@ func (a *auth) session(expiry time.Time) string {
 }
 
 func (a *auth) sign(msg string) string {
-	m := hmac.New(sha256.New, a.token)
+	m := hmac.New(sha256.New, a.sessionKey())
 	m.Write([]byte(msg))
 	return hex.EncodeToString(m.Sum(nil))
 }
@@ -124,20 +154,135 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "authentication is disabled"})
 		return
 	}
-	token := strings.TrimSpace(r.FormValue("token"))
-	if !a.matches(token) {
-		// Same delay whether the token was empty or merely wrong, and no hint
-		// about which. Slow enough to make guessing pointless over a network,
-		// fast enough that a human notices nothing.
-		time.Sleep(500 * time.Millisecond)
-		if wantsHTML(r) {
-			a.serveLogin(w, http.StatusUnauthorized, "That token was not accepted.")
-			return
-		}
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+	// Before an account exists there is nothing to log in to.
+	if a.bootstrapping() && strings.TrimSpace(r.FormValue("token")) == "" {
+		a.serveSignIn(w, http.StatusUnauthorized, "")
 		return
 	}
 
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	token := strings.TrimSpace(r.FormValue("token"))
+
+	ok := false
+	switch {
+	case token != "":
+		// The recovery path: the admin token still signs you in, which is what
+		// you reach for when the password is lost or Vault is unavailable.
+		ok = a.matches(token)
+	case a.ops != nil:
+		ok = a.ops.verify(username, password)
+	}
+
+	if !ok {
+		// The same delay and the same wording whichever field was wrong, so
+		// neither a valid username nor a valid token can be found by probing.
+		time.Sleep(500 * time.Millisecond)
+		if wantsHTML(r) {
+			a.serveSignIn(w, http.StatusUnauthorized, "Those credentials were not accepted.")
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+
+	a.setSession(w, r)
+	if wantsHTML(r) {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleBootstrap creates the first operator account. It is authorised by the
+// admin token, which the relay already requires in order to start at all --
+// so nothing new has to be distributed, no password is written to a log, and
+// there is no window in which whoever reaches the page first owns the relay.
+func (a *auth) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	if !a.bootstrapping() {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "an operator account already exists; change the password instead"})
+		return
+	}
+	if !a.enabled() {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "set an admin token before creating an operator account"})
+		return
+	}
+
+	if !a.matches(strings.TrimSpace(r.FormValue("token"))) {
+		time.Sleep(500 * time.Millisecond)
+		a.fail(w, r, http.StatusUnauthorized, "That admin token was not accepted.")
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	if password != r.FormValue("password_confirm") {
+		a.fail(w, r, http.StatusBadRequest, "The two passwords do not match.")
+		return
+	}
+	if err := a.ops.save(username, password, true); err != nil {
+		a.fail(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	slog.Info("operator account created", "user", username)
+	a.setSession(w, r)
+	if wantsHTML(r) {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "username": username})
+}
+
+// handleChangePassword runs behind the gate, so the caller is already signed in.
+// The current password is still required: a borrowed session should not be
+// enough to lock the real operator out.
+func (a *auth) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if a.ops == nil || !a.ops.exists() {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no operator account yet"})
+		return
+	}
+	rec := a.ops.current()
+
+	current := r.FormValue("current_password")
+	if !a.ops.verify(rec.Username, current) && !a.matches(strings.TrimSpace(current)) {
+		time.Sleep(500 * time.Millisecond)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the current password is wrong"})
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	if username == "" {
+		username = rec.Username
+	}
+	password := r.FormValue("password")
+	if password != r.FormValue("password_confirm") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "the two passwords do not match"})
+		return
+	}
+	// Rotating the session key signs every other session out, which is the
+	// point of changing a password you think someone else knows.
+	if err := a.ops.save(username, password, true); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	slog.Info("operator password changed", "user", username)
+	a.setSession(w, r)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "username": username})
+}
+
+func (a *auth) fail(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if wantsHTML(r) {
+		a.serveSignIn(w, status, msg)
+		return
+	}
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func (a *auth) setSession(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    a.session(time.Now().Add(sessionTTL)),
@@ -150,12 +295,6 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:  isTLS(r),
 		Expires: time.Now().Add(sessionTTL),
 	})
-
-	if wantsHTML(r) {
-		http.Redirect(w, r, "/ui/", http.StatusFound)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (a *auth) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +308,7 @@ func (a *auth) handleLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 	if wantsHTML(r) {
-		a.serveLogin(w, http.StatusOK, "Signed out.")
+		a.serveSignIn(w, http.StatusOK, "Signed out.")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -188,19 +327,26 @@ func wantsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-func (a *auth) serveLogin(w http.ResponseWriter, status int, message string) {
+// serveSignIn renders whichever of the two forms applies: first-run setup while
+// there is no account, an ordinary login once there is one.
+func (a *auth) serveSignIn(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
+
 	note := ""
 	if message != "" {
-		note = `<p class="note">` + message + `</p>`
+		note = `<p class="note">` + html.EscapeString(message) + `</p>`
 	}
-	fmt.Fprintf(w, loginPage, note)
+	if a.bootstrapping() {
+		fmt.Fprintf(w, pageShell, "Set up beacon", note, bootstrapFields)
+		return
+	}
+	fmt.Fprintf(w, pageShell, "beacon", note, loginFields)
 }
 
 // Deliberately self-contained: no asset from /ui is served before sign-in.
-const loginPage = `<!doctype html>
+const pageShell = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>beacon</title>
@@ -210,18 +356,47 @@ const loginPage = `<!doctype html>
         min-height: 100vh; margin: 0; }
  form { display: grid; gap: .75rem; width: min(22rem, 90vw); }
  h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
+ p.hint { margin: 0; font-size: .85rem; opacity: .75; }
  input { font: inherit; padding: .5rem .6rem; border: 1px solid #8888;
          border-radius: 6px; background: transparent; color: inherit; }
  button { font: inherit; padding: .5rem; border: 0; border-radius: 6px;
           background: #2563eb; color: #fff; cursor: pointer; }
  .note { color: #b91c1c; margin: 0; font-size: .9rem; }
+ details { font-size: .85rem; opacity: .8; }
+ summary { cursor: pointer; }
 </style>
-<form method="post" action="/api/login">
-  <h1>beacon</h1>
-  %s
-  <input type="password" name="token" placeholder="Operator token" autofocus
+<h1>%s</h1>
+%s
+%s
+`
+
+const loginFields = `<form method="post" action="/api/login">
+  <input name="username" placeholder="Username" autofocus autocomplete="username">
+  <input type="password" name="password" placeholder="Password"
          autocomplete="current-password">
   <button type="submit">Sign in</button>
+</form>
+<details>
+  <summary>Lost the password?</summary>
+  <form method="post" action="/api/login">
+    <p class="hint">Sign in with the admin token from the relay host, then
+       change the password.</p>
+    <input type="password" name="token" placeholder="Admin token">
+    <button type="submit">Sign in with token</button>
+  </form>
+</details>
+`
+
+const bootstrapFields = `<form method="post" action="/api/bootstrap">
+  <p class="hint">No operator account exists yet. Authorise with the admin token
+     from the relay host, then choose the credentials you will use from now on.</p>
+  <input type="password" name="token" placeholder="Admin token" autofocus>
+  <input name="username" placeholder="Choose a username" autocomplete="username">
+  <input type="password" name="password" placeholder="Choose a password (12+ characters)"
+         autocomplete="new-password">
+  <input type="password" name="password_confirm" placeholder="Repeat the password"
+         autocomplete="new-password">
+  <button type="submit">Create account</button>
 </form>
 `
 

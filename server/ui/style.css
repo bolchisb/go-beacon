@@ -107,3 +107,16 @@ button.copy:focus-visible { opacity: 1; }
 button.copy.ok, button.copy.ok:hover:enabled { color: var(--up); opacity: 1; }
 button.copy.bad, button.copy.bad:hover:enabled { color: var(--down); opacity: 1; }
 button.copy svg { display: block; width: 12px; height: 12px; }
+
+/* Account section: the password form and the signed-in indicator. */
+#account form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+#account input { font: inherit; padding: .4rem .5rem; border: 1px solid #8888;
+                 border-radius: 6px; background: transparent; color: inherit;
+                 min-width: 14rem; }
+#account button { font: inherit; padding: .4rem .8rem; border: 0; border-radius: 6px;
+                  background: #2563eb; color: #fff; cursor: pointer; }
+#password-note { font-size: .9rem; }
+#password-note.ok { color: #15803d; }
+#password-note.err { color: #b91c1c; }
+.hint { font-size: .85rem; opacity: .7; }
+.operator::before { content: "signed in as "; opacity: .7; }

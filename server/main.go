@@ -49,6 +49,7 @@ func runServer(cfg Config) error {
 	s := newServer(cfg)
 	s.auth.warnIfOpen()
 	s.vault.start()
+	s.ops.load()
 	httpSrv := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: s.routes(),

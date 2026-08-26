@@ -15,7 +15,7 @@ const testToken = "s3cr3t-operator-token"
 
 // stub stands in for the mux so these tests exercise the gate and nothing else.
 func gated(token string) http.Handler {
-	return newAuth(token).protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return newAuth(token, newOperatorStore(nil, "")).protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("reached"))
 	}))
@@ -98,7 +98,7 @@ func TestBrowserGetsALoginPageAndAnAPIClientGetsJSON(t *testing.T) {
 }
 
 func TestLoginIssuesASessionCookieThatWorks(t *testing.T) {
-	a := newAuth(testToken)
+	a := newAuth(testToken, newOperatorStore(nil, ""))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/login",
 		strings.NewReader("token="+testToken))
@@ -125,7 +125,7 @@ func TestLoginIssuesASessionCookieThatWorks(t *testing.T) {
 }
 
 func TestLoginRefusesTheWrongToken(t *testing.T) {
-	a := newAuth(testToken)
+	a := newAuth(testToken, newOperatorStore(nil, ""))
 	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader("token=wrong"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -140,7 +140,7 @@ func TestLoginRefusesTheWrongToken(t *testing.T) {
 }
 
 func TestATamperedOrExpiredSessionIsRejected(t *testing.T) {
-	a := newAuth(testToken)
+	a := newAuth(testToken, newOperatorStore(nil, ""))
 
 	if a.validSession("not-a-session") {
 		t.Error("garbage accepted")
@@ -162,8 +162,8 @@ func TestATamperedOrExpiredSessionIsRejected(t *testing.T) {
 func TestRotatingTheTokenInvalidatesOutstandingSessions(t *testing.T) {
 	// The signing key is the token itself, so this comes for free -- and it is
 	// the only revocation mechanism a stateless server has.
-	old := newAuth(testToken).session(time.Now().Add(time.Hour))
-	if newAuth("a-different-token").validSession(old) {
+	old := newAuth(testToken, newOperatorStore(nil, "")).session(time.Now().Add(time.Hour))
+	if newAuth("a-different-token", newOperatorStore(nil, "")).validSession(old) {
 		t.Error("a session survived a token rotation")
 	}
 }
@@ -181,3 +181,5 @@ func TestServerRoutesAreGated(t *testing.T) {
 		t.Errorf("/healthz: got %d, want 200", got)
 	}
 }
+
+func timeNowPlusHour() time.Time { return time.Now().Add(time.Hour) }
