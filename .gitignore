@@ -31,6 +31,8 @@ credentials.json
 # this is a backstop in case one is ever pulled out for inspection.
 unseal.json
 vault/secrets/
+secrets/
+admin-token
 
 # Claude Code
 .claude/

@@ -40,11 +40,13 @@ services:
     pull_policy: always
     environment:
       BEACON_LISTEN: ":8080"
-      # Gates /ui, /api and /mcp. Without it the relay starts, says so loudly in
-      # its log, and serves all three to anyone who reaches it.
-      BEACON_ADMIN_TOKEN: ${BEACON_ADMIN_TOKEN:?set BEACON_ADMIN_TOKEN, see .env.example}
+      # Gates /ui, /api and /mcp. Read from a mounted file rather than passed
+      # in the environment: this is the value that grants command execution on
+      # every connected machine, and an environment variable is visible to
+      # `docker inspect` and to anything that dumps the environment.
+      BEACON_ADMIN_TOKEN_FILE: "/run/secrets/beacon_admin_token"
       BEACON_VAULT_ADDR: "http://vault:8200"
-      BEACON_VAULT_TRANSIT_KEY: ${BEACON_TRANSIT_KEY:-beacon-agent-assertions}
+      BEACON_VAULT_TRANSIT_KEY: "beacon-agent-assertions"
       # No Vault credential in this environment at all. Vault Agent exchanges a
       # wrapped, single-use secret id for a short-lived token, keeps it renewed,
       # and the relay only ever reads that file.
@@ -77,6 +79,9 @@ services:
       - beacon-state:/pki
       # Read-only: the relay consumes the token sink, it never writes to it.
       - vault-agent:/agent:ro
+
+    secrets:
+      - beacon_admin_token
 
     # HEALTHCHECK comes from the image (the binary probes itself); it is
     # inherited here and deliberately not redefined.
@@ -189,6 +194,14 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+secrets:
+  # A file on the host, deliberately outside this repository so it can never be
+  # picked up by an image build context. Create it with:
+  #   install -m 0600 /dev/null /etc/beacon/admin-token
+  #   openssl rand -base64 32 > /etc/beacon/admin-token
+  beacon_admin_token:
+    file: ${BEACON_ADMIN_TOKEN_FILE:-/etc/beacon/admin-token}
 
 volumes:
   beacon-state:
