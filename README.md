@@ -619,12 +619,38 @@ port is the target's business:
 
 **On your workstation**
 
-| What | How |
-| --- | --- |
-| The `beacon` binary | on `PATH` — `ProxyCommand` runs it by name, with no shell of yours to fall back on |
-| A session with the relay | `beacon login` |
-| The ssh entry | the `Host` block from the previous section |
-| VS Code | the **Remote - SSH** extension |
+Four things, once. First the binary, which `ProxyCommand` runs by name and so
+has to be on `PATH`:
+
+```sh
+mkdir -p ~/bin
+wget -qO ~/bin/beacon https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-darwin-arm64
+chmod +x ~/bin/beacon
+```
+
+Substitute the file name for your platform. [Setting up your
+workstation](#setting-up-your-workstation) has the checksums, the macOS
+quarantine note and the rest of the detail.
+
+Then the relay it should talk to, and a session on it:
+
+```sh
+beacon config set server=https://relay.example.com
+beacon login
+```
+
+Then the ssh entry from the previous section, in `~/.ssh/config`:
+
+```
+Host target-01
+    User you
+    ProxyCommand beacon forward %h ssh --stdio
+    ForwardAgent yes
+```
+
+And finally the **Remote - SSH** extension in VS Code. Confirm plain
+`ssh target-01` works before opening the editor: if it does not, the editor will
+only tell you so more slowly.
 
 Then run **Remote-SSH: Connect to Host** from the command palette and pick
 `target-01`. VS Code opens a window whose terminal, extensions, debugger and
@@ -657,6 +683,61 @@ Two things worth knowing about how this behaves:
 > On a Windows target you land in a Windows shell, with that machine's
 > toolchain. If the one you need lives in WSL, point the `ssh` service at the
 > sshd inside the distribution instead of at the host's.
+
+#### The other routes, from the same setup
+
+Nothing above replaces the rest of the toolkit; it changes when you reach for
+it. The editor covers the work you do by hand, and each of these covers
+something it cannot.
+
+**Files — `scp` and `rsync`.** The `Host` block is an ordinary ssh entry, so
+they take the alias and nothing else. No port, no second terminal:
+
+```sh
+scp ./patch.diff target-01:/tmp/
+rsync -av ./src/ target-01:/opt/app/
+```
+
+VS Code already moves a file you drag into its explorer. These are for the ones
+you did not want to open: a database dump out, a vendor archive in, a directory
+tree either way.
+
+**A desktop — `beacon forward … rdp`.** A remote desktop client cannot spawn a
+transport the way ssh does with `ProxyCommand`, so this route keeps the local
+listener:
+
+```sh
+beacon forward target-01 rdp --listen 127.0.0.1:3390
+```
+
+Worth keeping for what has no terminal at all: an installer with a dialog, a
+vendor tool that only ships a GUI, a Windows setting behind three panes.
+
+**An assistant — the MCP endpoint.** The relay exposes its own tools, so the
+assistant needs nothing local beyond being pointed at them:
+
+```sh
+claude mcp add --transport http beacon https://relay.example.com/mcp \
+  --header "Authorization: Bearer $BEACON_ADMIN_TOKEN"
+```
+
+The division of labour is worth being deliberate about, because the two look
+alike and are not:
+
+| | Reaches the target by | Use it for |
+| --- | --- | --- |
+| An assistant in the VS Code terminal | already being on the machine | the repository you have open — it sees the real filesystem, with no tool call in between |
+| The MCP endpoint | `run_command`, `read_file`, `list_dir` over the relay | machines you are **not** sitting in: a check across the fleet, a machine you have no editor window for |
+
+`list_agents` first, then the machine id in every other call. The clipboard
+tools ride the same endpoint and are the quickest way to carry a stack trace or
+a connection string off the target:
+
+> read the clipboard on target-01
+
+> [!CAUTION]
+> The MCP endpoint grants command execution on every connected machine. Read
+> [Security](#security) before pointing an assistant at it.
 
 ### Remote desktop
 
