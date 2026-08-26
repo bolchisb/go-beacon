@@ -169,9 +169,10 @@ func validateCredentials(username, password string) error {
 	if len(username) > 64 {
 		return errors.New("that username is too long")
 	}
-	// No minimum length, by explicit choice of the operator. The only rule left
-	// is that there has to be something: an empty password would make the gate
-	// decorative, since verify would then accept it from anyone.
+	// No minimum length, by explicit choice of the operator: the forms suggest
+	// twelve or more and leave the decision to whoever is typing. The only rule
+	// left is that there has to be something -- an empty password would make
+	// the gate decorative, since verify would then accept it from anyone.
 	if password == "" {
 		return errors.New("a password is required")
 	}
