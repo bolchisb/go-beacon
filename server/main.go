@@ -47,6 +47,8 @@ func runServer(cfg Config) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	s := newServer(cfg)
+	s.auth.warnIfOpen()
+	s.vault.start()
 	httpSrv := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: s.routes(),

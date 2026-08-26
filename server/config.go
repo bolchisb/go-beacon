@@ -9,11 +9,41 @@ import (
 // and under k3s without a config file.
 type Config struct {
 	Listen string // BEACON_LISTEN, e.g. ":8080"
+
+	// AdminToken gates the dashboard, the API and the MCP endpoint.
+	// BEACON_ADMIN_TOKEN; empty leaves them open, which is announced at startup.
+	AdminToken string
+
+	// StateDir is the one writable path the relay has. It holds no secrets --
+	// only the cached transit public keys, which is what lets agent
+	// verification survive a Vault outage.
+	StateDir string // BEACON_STATE_DIR
+
+	// Vault issues and signs agent credentials. Either VaultToken or the
+	// AppRole pair authenticates the relay to it; compose uses a token in
+	// development and AppRole in production.
+	VaultAddr string // BEACON_VAULT_ADDR
+	// VaultTokenFile is the Vault Agent token sink. Preferred over the two
+	// below: the relay then never holds a long-lived credential, and the agent
+	// rotates the token underneath it.
+	VaultTokenFile  string // BEACON_VAULT_TOKEN_FILE
+	VaultToken      string // BEACON_VAULT_TOKEN
+	VaultRoleID     string // BEACON_VAULT_ROLE_ID
+	VaultSecretID   string // BEACON_VAULT_SECRET_ID
+	VaultTransitKey string // BEACON_VAULT_TRANSIT_KEY
 }
 
 func loadConfig() Config {
 	return Config{
-		Listen: env("BEACON_LISTEN", ":8080"),
+		Listen:          env("BEACON_LISTEN", ":8080"),
+		AdminToken:      env("BEACON_ADMIN_TOKEN", ""),
+		StateDir:        env("BEACON_STATE_DIR", "/pki"),
+		VaultAddr:       env("BEACON_VAULT_ADDR", ""),
+		VaultTokenFile:  env("BEACON_VAULT_TOKEN_FILE", ""),
+		VaultToken:      env("BEACON_VAULT_TOKEN", ""),
+		VaultRoleID:     env("BEACON_VAULT_ROLE_ID", ""),
+		VaultSecretID:   env("BEACON_VAULT_SECRET_ID", ""),
+		VaultTransitKey: env("BEACON_VAULT_TRANSIT_KEY", "beacon-agent-assertions"),
 	}
 }
 

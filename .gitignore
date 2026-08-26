@@ -27,6 +27,10 @@ go.work.sum
 *.pem
 *.key
 credentials.json
+# Vault unseal shares and root token. These live in a named volume at runtime;
+# this is a backstop in case one is ever pulled out for inspection.
+unseal.json
+vault/secrets/
 
 # Claude Code
 .claude/
@@ -39,3 +43,6 @@ CLAUDE.local.md
 .vscode/
 *.swp
 .DS_Store
+
+# Internal engineering notes
+/notes/

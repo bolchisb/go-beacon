@@ -157,7 +157,14 @@ func saveConfig(c Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	// 0600, not 0644: this file carries the agent's credentials, and it lives in
+	// a system-wide directory that every local account can read.
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return "", err
+	}
+	// WriteFile only applies the mode when it creates the file, so a config
+	// written by an older build keeps its 0644 until it is tightened here.
+	if err := os.Chmod(path, 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

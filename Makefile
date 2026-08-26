@@ -18,7 +18,7 @@ PLATFORMS ?= windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 da
 
 GH_REPO ?= bolchisb/go-beacon
 
-.PHONY: up down logs tidy vet test build client release clean
+.PHONY: up down logs tidy vet test build client release clean vault-init vault-status vault-unseal-log vault-agent-log
 
 ## up: build and start the relay
 up:
@@ -30,6 +30,27 @@ down:
 
 logs:
 	$(COMPOSE) logs -f
+
+## vault-init: create the transit key, policy and approle. Idempotent.
+##   Run once after the first `make up`. Vault Agent picks the credentials up
+##   on its own from there -- nothing has to be copied into .env.
+vault-init:
+	@$(COMPOSE) exec -T vault-unseal sh -c '\
+	  VAULT_ADDR=http://vault:8200 \
+	  VAULT_TOKEN=$$(jq -r .root_token /unseal/unseal.json) \
+	  beacon-vault-bootstrap'
+
+## vault-status: is Vault up and unsealed?
+vault-status:
+	@$(COMPOSE) exec -T vault vault status || true
+
+## vault-unseal-log: what the unseal supervisor has been doing
+vault-unseal-log:
+	@$(COMPOSE) logs --tail=30 vault-unseal
+
+## vault-agent-log: has Vault Agent got a token, and is it renewing it?
+vault-agent-log:
+	@$(COMPOSE) logs --tail=30 vault-agent
 
 ## tidy: resolve dependencies and write go.sum
 tidy:

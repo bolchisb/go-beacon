@@ -1,6 +1,14 @@
+# Development stack: the relay, a Vault, and the process that keeps it unsealed.
+#
 # One port serves both audiences: /ui + /api for the dashboard, /agent/connect
-# for the agents. The dashboard is LAN-only by design, so the published port is
-# bound to the host and left unauthenticated until mTLS lands in phase 2.
+# for the agents. The dashboard is LAN-only by design; BEACON_ADMIN_TOKEN below
+# gates it, the API and the MCP endpoint, all three of which grant command
+# execution on every connected machine.
+#
+# Unlike a typical dev stack this runs Vault sealed, exactly as production does,
+# and lets the unseal supervisor initialise and open it. Dev mode would have
+# been simpler, but then the unseal path would never be exercised until the
+# first production reboot -- which is the worst possible time to discover it.
 services:
   beacon-server:
     build:
@@ -12,12 +20,98 @@ services:
     container_name: beacon-server
     environment:
       BEACON_LISTEN: ":8080"
+      # A fixed token is fine here and nowhere else: this file is for a laptop.
+      BEACON_ADMIN_TOKEN: "${BEACON_ADMIN_TOKEN:-dev-operator-token}"
+      BEACON_VAULT_ADDR: "http://vault:8200"
+      BEACON_VAULT_TRANSIT_KEY: "beacon-agent-assertions"
+      # No credential in the environment. Vault Agent keeps a short-lived
+      # token in this file and renews it; the relay never holds the AppRole
+      # secret id at all.
+      BEACON_VAULT_TOKEN_FILE: "/agent/token"
     ports:
       - "8080:8080"
     volumes:
-      # empty today; holds the CA and issued certificates from phase 2 on
-      - beacon-pki:/pki
+      # Caches the transit public key so the relay keeps verifying agents while
+      # Vault is sealed, restarting or unreachable.
+      - beacon-state:/pki
+      # Read-only: the relay consumes the token sink, it never writes to it.
+      - vault-agent:/agent:ro
+    depends_on:
+      # service_started, not service_healthy, and deliberately: the relay is
+      # designed to keep serving a connected fleet through a Vault outage, so
+      # making it wait for Vault would reintroduce the coupling that design
+      # exists to avoid.
+      vault:
+        condition: service_started
+    restart: unless-stopped
+
+  vault:
+    build:
+      context: .
+      dockerfile: vault/Dockerfile
+    image: go-beacon/vault:dev
+    container_name: beacon-vault
+    # The development config, which turns memory locking off. A rootless
+    # container runtime cannot grant an effective CAP_IPC_LOCK, and Vault would
+    # refuse to start. Production uses vault.hcl and keeps the lock.
+    command: ["server", "-config=/vault/beacon/vault-dev.hcl"]
+    environment:
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    # Not published, exactly as in production. Everything that needs Vault --
+    # the relay, the unseal supervisor, `make vault-init` -- reaches it over the
+    # compose network or through `compose exec`, so a host port would only widen
+    # the surface. It also collides with the rootless port forwarder, which
+    # binds inside the container's own namespace.
+    expose:
+      - "8200"
+    volumes:
+      - vault-data:/vault/file
+    restart: unless-stopped
+
+  # Initialises Vault on first run and keeps it unsealed afterwards. It is a
+  # supervisor, not a one-shot: a host reboot brings Vault back sealed, and
+  # nobody should have to notice.
+  vault-unseal:
+    build:
+      context: .
+      dockerfile: vault/Dockerfile
+    image: go-beacon/vault:dev
+    container_name: beacon-vault-unseal
+    entrypoint: ["beacon-vault-unseal"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    volumes:
+      # A volume of its own. The unseal shares must not travel with a backup of
+      # the data they open.
+      - vault-unseal:/unseal
+      # Writable: this is where the wrapped secret id for Vault Agent is left.
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
+    restart: unless-stopped
+
+  # Turns a wrapped, single-use secret id into a short-lived token and keeps it
+  # renewed, so no long-lived credential ever reaches the relay's environment.
+  vault-agent:
+    build:
+      context: .
+      dockerfile: vault/Dockerfile
+    image: go-beacon/vault:dev
+    container_name: beacon-vault-agent
+    entrypoint: ["vault", "agent", "-config=/vault/beacon/agent.hcl"]
+    volumes:
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
-  beacon-pki:
+  beacon-state:
+  vault-data:
+  # role id, the wrapped secret id in transit, and the token sink.
+  vault-agent:
+  # Holds the unseal shares and the root token. Back this up separately from
+  # vault-data, and never into the same archive.
+  vault-unseal:

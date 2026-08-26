@@ -118,9 +118,9 @@ feature costs here.
   rollback, process supervision, port forwarding, the ssh command path,
   clipboard handling and config parsing. `make test` runs them; `make vet` gates
   `go vet` and `gofmt` over the whole tree.
-- Hard failures get investigated properly and written down rather than patched
-  until the symptom disappears. [`notes/`](notes/) carries the record — an
-  upgrade handshake race, the Windows auto-update path, the supervision loop.
+- Hard failures get investigated to a root cause and written up rather than
+  patched until the symptom disappears — an upgrade handshake race, the Windows
+  auto-update path, the supervision loop. Those write-ups are kept internally.
 - Every release is built reproducibly from a tagged commit, refuses to build
   from a dirty tree, and publishes `SHA256SUMS`.
 

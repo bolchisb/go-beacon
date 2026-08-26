@@ -1,8 +1,10 @@
 # Production deployment. Unlike docker-compose.yml, this file never builds: it
-# runs the image published by .github/workflows/server-image.yml, pinned to an
-# explicit tag so a deploy is reproducible and a rollback is a tag change.
+# runs the images published by .github/workflows/, pinned to an explicit tag so
+# a deploy is reproducible and a rollback is a tag change.
 #
 #   BEACON_IMAGE_TAG=v1.2.3 docker compose -f docker-compose.prod.yml up -d
+#
+# The relay and its Vault are tagged together and are expected to move together.
 #
 # The ${...} values below are read by Compose itself from a .env file in this
 # directory, which it loads automatically -- see .env.example for the template.
@@ -11,11 +13,25 @@
 # in .env has no effect: the container always listens on 8080 and the host port
 # is chosen by the port mapping.
 #
-# The relay is expected to sit behind a TLS-terminating reverse proxy: the
-# dashboard is unauthenticated and the agent tunnel is plain HTTP until mTLS
-# lands. Two things the proxy must get right, or the relay silently degrades:
-# response buffering off (the /api/events feed is SSE) and no idle or read
-# timeout on /agent/connect (a healthy tunnel is quiet for minutes at a time).
+# The relay is expected to sit behind a TLS-terminating reverse proxy. Two
+# things the proxy must get right, or the relay silently degrades: response
+# buffering off (the /api/events feed is SSE) and no idle or read timeout on
+# /agent/connect (a healthy tunnel is quiet for minutes at a time).
+#
+# ---------------------------------------------------------------------------
+# UNSEALING
+#
+# Vault comes back sealed after every restart. beacon-vault-unseal watches for
+# that and opens it, so a host reboot needs nobody. The shares it uses live in
+# the vault-unseal volume, on this host, next to the data they open -- a chosen
+# trade against a dependency on a cloud KMS, not an oversight. It means the two
+# volumes have very different handling: vault-data may be backed up, and
+# vault-unseal must never end up in the same archive.
+#
+# While Vault is sealed or down the relay keeps verifying agents that already
+# hold a credential, because it caches the transit public keys. Only enrolment
+# and renewal stop.
+# ---------------------------------------------------------------------------
 services:
   beacon-server:
     image: ghcr.io/bolchisb/go-beacon-server:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
@@ -24,10 +40,26 @@ services:
     pull_policy: always
     environment:
       BEACON_LISTEN: ":8080"
+      # Gates /ui, /api and /mcp. Without it the relay starts, says so loudly in
+      # its log, and serves all three to anyone who reaches it.
+      BEACON_ADMIN_TOKEN: ${BEACON_ADMIN_TOKEN:?set BEACON_ADMIN_TOKEN, see .env.example}
+      BEACON_VAULT_ADDR: "http://vault:8200"
+      BEACON_VAULT_TRANSIT_KEY: ${BEACON_TRANSIT_KEY:-beacon-agent-assertions}
+      # No Vault credential in this environment at all. Vault Agent exchanges a
+      # wrapped, single-use secret id for a short-lived token, keeps it renewed,
+      # and the relay only ever reads that file.
+      BEACON_VAULT_TOKEN_FILE: "/agent/token"
     ports:
       # loopback by default: publish on a routable address only once a proxy
       # fronts it, or set BEACON_BIND to the interface the proxy reaches
       - "${BEACON_BIND:-127.0.0.1}:${BEACON_PORT:-8080}:8080"
+    depends_on:
+      # service_started, not service_healthy, and deliberately: the relay is
+      # designed to keep serving a connected fleet through a Vault outage, so
+      # making it wait for Vault would reintroduce the coupling that design
+      # exists to avoid.
+      vault:
+        condition: service_started
     restart: unless-stopped
 
     # The image is a static binary on scratch. It writes nothing outside /pki,
@@ -37,19 +69,20 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # scratch carries no /etc/passwd, so the uid has to be numeric. Once phase 2
-    # writes the CA into /pki, the named volume needs to be chowned to this uid:
-    # docker volume create leaves it owned by root.
+    # scratch carries no /etc/passwd, so the uid has to be numeric. The named
+    # volume needs chowning to this uid: docker volume create leaves it root.
     user: "65532:65532"
 
     volumes:
-      - beacon-pki:/pki
+      - beacon-state:/pki
+      # Read-only: the relay consumes the token sink, it never writes to it.
+      - vault-agent:/agent:ro
 
     # HEALTHCHECK comes from the image (the binary probes itself); it is
     # inherited here and deliberately not redefined.
 
     # A relay is I/O bound and holds one goroutine pair per tunnel. The limits
-    # are a blast radius, not a target — raise them with the agent count.
+    # are a blast radius, not a target -- raise them with the agent count.
     deploy:
       resources:
         limits:
@@ -68,5 +101,104 @@ services:
     # Long enough for in-flight sessions to drain; the server shuts down in 5s.
     stop_grace_period: 30s
 
+  vault:
+    image: ghcr.io/bolchisb/go-beacon-vault:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-vault
+    pull_policy: always
+    # No `ports`. Vault is reachable only from the relay and the unseal
+    # supervisor, over the compose network. The listener itself binds
+    # 0.0.0.0:8200 inside the container, which is what lets those two reach it;
+    # not publishing a port is what keeps everyone else out.
+    expose:
+      - "8200"
+    environment:
+      # For the CLI inside this container -- the healthcheck below talks to its
+      # own listener. Other services address Vault as http://vault:8200.
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    # The configuration is baked into the image, so nothing here can drift out
+    # of step with the binary it configures.
+    # IPC_LOCK lets Vault mlock its memory, so unsealed key material is never
+    # written to swap. Without it Vault refuses to start unless mlock is
+    # disabled in the config, which is the worse of the two options.
+    cap_add:
+      - IPC_LOCK
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - vault-data:/vault/file
+    healthcheck:
+      # Exit 0 unsealed, 2 sealed, 1 unreachable. Sealed counts as unhealthy on
+      # purpose: the unseal supervisor should have fixed it, and a Vault that
+      # stays sealed is a fault worth surfacing rather than tolerating.
+      test: ["CMD", "vault", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    stop_grace_period: 30s
+
+  vault-unseal:
+    image: ghcr.io/bolchisb/go-beacon-vault:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-vault-unseal
+    pull_policy: always
+    entrypoint: ["beacon-vault-unseal"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      # Its own volume, and the only container that mounts it.
+      - vault-unseal:/unseal
+      # Writable: this is where the wrapped secret id for Vault Agent is left.
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  vault-agent:
+    image: ghcr.io/bolchisb/go-beacon-vault:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-vault-agent
+    pull_policy: always
+    entrypoint: ["vault", "agent", "-config=/vault/beacon/agent.hcl"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
 volumes:
-  beacon-pki:
+  beacon-state:
+  # Holds the sealed Vault. Losing it loses the signing key and with it every
+  # agent credential: back it up.
+  vault-data:
+  # Holds the unseal shares and the root token. Back it up too -- losing it
+  # makes vault-data unopenable -- but never into the same archive, or the
+  # backup carries both the lock and its key.
+  vault-unseal:
+  # role id, the wrapped secret id while it is in transit, and the token sink.
+  # Nothing here is long-lived; it does not need backing up.
+  vault-agent:
