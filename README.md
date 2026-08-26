@@ -348,7 +348,7 @@ The same binary serves two roles, and confusing them is the most common mistake.
 Copy the binary for the target's platform out of `dist/`, then:
 
 ```sh
-beacon install --server https://relay.example.com --id build-vm-01
+beacon install --server https://relay.example.com --id target-01
 ```
 
 It asks for an operator username and password, enrols the machine, then
@@ -359,10 +359,19 @@ machine. What stays behind is a keypair generated locally and the relay's
 signed statement that it belongs to this agent id — so a compromised target
 yields its own identity and nothing that reaches any other machine.
 
+`beacon enroll` does the same thing on a machine that is already installed —
+after an assertion expires, or when pointing an agent at a different relay —
+without touching the service.
+
 > [!NOTE]
 > Enrolment needs the relay reachable and its Vault unsealed. An agent that is
 > already enrolled keeps connecting through a Vault outage; only enrolling a new
 > one has to wait.
+
+> [!IMPORTANT]
+> `beacon login` is a different thing and does not enrol anything. It signs an
+> **operator** in, so that `beacon ssh` and `beacon forward` work from that
+> machine. An agent needs `beacon enroll`.
 
 ### Agent commands
 
@@ -371,6 +380,7 @@ yields its own identity and nothing that reaches any other machine.
 | `beacon run` | Run in the foreground instead of as a service |
 | `beacon status` | Show whether the agent is connected, and its round-trip time |
 | `beacon config` | Show every setting and where its value came from |
+| `beacon enroll` | Give this machine an identity with the relay, without reinstalling the service |
 | `beacon login` / `logout` | Sign in to the relay with the dashboard's username and password |
 | `beacon ssh` | Open a terminal on a machine, in this terminal |
 | `beacon forward` | Open a local port that leads to a service on a remote machine |
@@ -513,7 +523,7 @@ colours and window resizing all behave.
 ### A shell in your own terminal
 
 ```sh
-beacon ssh build-vm-01
+beacon ssh target-01
 ```
 
 This carries the same stream the dashboard uses and lands in a shell the same
@@ -531,7 +541,7 @@ which means the target's own sshd and its own credentials. Open the port in one
 terminal and leave it running:
 
 ```sh
-beacon forward build-vm-01 ssh --listen 127.0.0.1:2222
+beacon forward target-01 ssh --listen 127.0.0.1:2222
 ```
 
 Then work against it from anywhere else, as usual:
@@ -552,14 +562,32 @@ local port, and the bytes leave over 443.
 > on your own machine instead, which looks like the tunnel asking for a password
 > when it is really your laptop.
 
-For something you use daily, name it once in `~/.ssh/config`:
+For something you use daily, drop the port. `--stdio` puts one session on
+stdin and stdout instead of a listener, which is what ssh's `ProxyCommand`
+expects, so ssh starts and stops the tunnel itself:
 
 ```
-Host build-vm-01
-    HostName 127.0.0.1
-    Port 2222
+Host target-01
     User you
+    ProxyCommand beacon forward %h ssh --stdio
+    ForwardAgent yes
 ```
+
+`%h` is the host you typed, so naming the block after the agent id lets one
+entry cover several machines: list them on the `Host` line, or match them with
+a pattern. Then `ssh target-01` works with no second terminal, and so does
+everything built on ssh: `scp`, `rsync`, `git`, VS Code Remote-SSH, JetBrains
+Gateway.
+
+`ForwardAgent yes` is what keeps your git credentials out of the customer's
+environment. The key stays on your laptop and only signatures cross the tunnel,
+so `git push` from the target machine authenticates as you without a token ever
+being written there — and the traffic still leaves from inside their network.
+
+> [!WARNING]
+> Agent forwarding lends your key for the length of the session: anyone with
+> root on the target can use the socket while you are connected. Leave it off
+> for a machine you do not trust that far.
 
 ### Remote desktop
 
@@ -567,7 +595,7 @@ The relay answers on one port and nothing else, so the port a desktop client
 needs is opened next to that client rather than on the relay:
 
 ```sh
-beacon forward build-vm-01 rdp --listen 127.0.0.1:3390
+beacon forward target-01 rdp --listen 127.0.0.1:3390
 ```
 
 Point Remote Desktop at `127.0.0.1:3390`. Each connection to that port becomes
@@ -605,7 +633,7 @@ It gains seven tools, each naming the agent it should act on:
 Call `list_agents` first; every other tool needs an id from it. From there it is
 ordinary conversation:
 
-> on build-vm-01, run the test suite and show me what failed
+> on target-01, run the test suite and show me what failed
 
 The assistant runs the command on that machine, reads the files it needs and
 reports back, without anyone opening a terminal.
@@ -619,7 +647,7 @@ reports back, without anyone opening a terminal.
 Two of those tools move text between machines, which is the quickest way to carry
 a stack trace or a connection string across:
 
-> read the clipboard on build-vm-01
+> read the clipboard on target-01
 
 > [!NOTE]
 > Windows and macOS always have a clipboard. A headless Linux host has none, and
@@ -629,7 +657,7 @@ a stack trace or a connection string across:
 
 | Step | What it adds |
 | --- | --- |
-| Credential renewal | Assertions last 90 days and are re-issued by running `beacon install` again. Renewing over the tunnel the agent already holds, with a grace window on the renewal path only, would remove the visit. |
+| Credential renewal | Assertions last 90 days and are re-issued by `beacon enroll`, which needs someone on the machine. Renewing over the tunnel the agent already holds, with a grace window on the renewal path only, would remove the visit. |
 | Revocation | Refusing one agent without waiting for its assertion to expire, and without touching the rest. |
 | Per-operator identity | Named operators rather than one shared account, so actions are attributable and one person can be removed without rotating for everyone. |
 

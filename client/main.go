@@ -47,6 +47,8 @@ func main() {
 		err = cmdInstall(rest)
 	case "uninstall":
 		err = cmdUninstall(rest)
+	case "enroll":
+		err = cmdEnroll(rest)
 	case "login":
 		err = cmdLogin(rest)
 	case "logout":
@@ -112,10 +114,10 @@ func printHelp() {
 		b.WriteString("  " + styValue.Render(fixed(c.name, 11)) + styDim.Render(c.summary) + "\n")
 	}
 	b.WriteString("\n" + styLabel.Render("EXAMPLES") + "\n")
-	b.WriteString(styDim.Render("  beacon install --server https://relay.example.com --id build-01") + "\n")
+	b.WriteString(styDim.Render("  beacon install --server https://relay.example.com --id target-01") + "\n")
 	b.WriteString(styDim.Render("  beacon status") + "\n")
-	b.WriteString(styDim.Render("  beacon ssh mm01ops") + "\n")
-	b.WriteString(styDim.Render("  beacon forward mm01ops rdp --listen 127.0.0.1:3390") + "\n")
+	b.WriteString(styDim.Render("  beacon ssh target-01") + "\n")
+	b.WriteString(styDim.Render("  beacon forward target-01 rdp --listen 127.0.0.1:3390") + "\n")
 	b.WriteString(styDim.Render("  beacon config set server=https://relay.example.com") + "\n")
 	b.WriteString("\n" + styLabel.Render("ENVIRONMENT") + "\n")
 	b.WriteString(styDim.Render("  BEACON_SERVER, BEACON_AGENT_ID, BEACON_CA_FILE") + "\n")

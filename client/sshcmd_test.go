@@ -10,12 +10,12 @@ import (
 
 func TestShellURLDerivesTheWebSocketEndpoint(t *testing.T) {
 	cases := []struct{ server, want string }{
-		{"https://relay.example.com", "wss://relay.example.com/api/agents/build-01/shell"},
-		{"http://127.0.0.1:8080", "ws://127.0.0.1:8080/api/agents/build-01/shell"},
-		{"https://relay.example.com/?x=1", "wss://relay.example.com/api/agents/build-01/shell"},
+		{"https://relay.example.com", "wss://relay.example.com/api/agents/target-01/shell"},
+		{"http://127.0.0.1:8080", "ws://127.0.0.1:8080/api/agents/target-01/shell"},
+		{"https://relay.example.com/?x=1", "wss://relay.example.com/api/agents/target-01/shell"},
 	}
 	for _, tc := range cases {
-		got, err := shellURL(tc.server, "build-01")
+		got, err := shellURL(tc.server, "target-01")
 		if err != nil {
 			t.Fatalf("%s: %v", tc.server, err)
 		}
@@ -25,7 +25,7 @@ func TestShellURLDerivesTheWebSocketEndpoint(t *testing.T) {
 	}
 
 	for _, bad := range []string{"ftp://relay", "relay.example.com", ""} {
-		if _, err := shellURL(bad, "build-01"); err == nil {
+		if _, err := shellURL(bad, "target-01"); err == nil {
 			t.Fatalf("%q should have been rejected", bad)
 		}
 	}

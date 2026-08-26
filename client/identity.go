@@ -124,7 +124,7 @@ func fetchChallenge(server, caFile string) (string, error) {
 // belongs to this id, the signature says the machine still holds that key.
 func identityHeaders(cfg *resolved, priv ed25519.PrivateKey) (http.Header, error) {
 	if cfg.Assertion == "" {
-		return nil, fmt.Errorf("this agent is not enrolled: run `beacon install` against the relay")
+		return nil, fmt.Errorf("this agent is not enrolled: run `beacon enroll` on this machine")
 	}
 	nonce, err := fetchChallenge(cfg.Server, cfg.CAFile)
 	if err != nil {

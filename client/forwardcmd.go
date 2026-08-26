@@ -27,14 +27,20 @@ import (
 // speaks TCP and knows nothing about the relay, and the relay itself answers on
 // 443 and nothing else. So the tunnel is a WebSocket to the relay, and this
 // end of it looks like an ordinary server on localhost.
+//
+// --stdio drops the port. ssh can spawn its own transport through
+// ProxyCommand, and a command that already speaks on stdin and stdout needs no
+// address to be agreed on beforehand -- which is what lets one ~/.ssh/config
+// entry cover every agent.
 func cmdForward(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: beacon forward AGENT SERVICE [flags]   (for example: beacon forward mm01ops rdp)")
+		return fmt.Errorf("usage: beacon forward AGENT SERVICE [flags]   (for example: beacon forward target-01 rdp)")
 	}
 	agent, service := args[0], args[1]
 
 	fs := flag.NewFlagSet("beacon forward", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:0", "local address to listen on; port 0 picks a free one")
+	stdio := fs.Bool("stdio", false, "carry one session on stdin and stdout instead of a local port, for ssh ProxyCommand")
 	fs.String(keyServer, "", "relay URL, http:// or https://")
 	fs.String(keyCA, "", "PEM bundle trusted in addition to the system roots")
 	fs.String(keyToken, "", "operator token for the relay's API")
@@ -56,6 +62,18 @@ func cmdForward(args []string) error {
 	target, err := forwardURL(cfg.Server, agent, service)
 	if err != nil {
 		return err
+	}
+
+	if *stdio {
+		// stdout is the tunnel from here on. Anything else written there is
+		// read by ssh as protocol and kills the session, so the logger -- set
+		// to stdout for every other command -- moves aside, and the panel that
+		// would announce the port is not drawn at all.
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		bridge(ctx, stdioConn{}, target, tlsCfg, cfg.Token, cfg.Session)
+		return nil
 	}
 
 	ln, err := net.Listen("tcp", *listen)
@@ -94,7 +112,7 @@ func cmdForward(args []string) error {
 
 // bridge carries one accepted connection over its own WebSocket. One
 // connection per session keeps a failure local to the session that caused it.
-func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Config, token, session string) {
+func bridge(ctx context.Context, local io.ReadWriteCloser, target string, tlsCfg *tls.Config, token, session string) {
 	defer local.Close()
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
@@ -127,7 +145,11 @@ func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Conf
 	}
 	remote = protocol.WithBuffered(remote, br)
 
-	slog.Info("forward: session open", "from", local.RemoteAddr().String())
+	from := "stdio"
+	if c, ok := local.(net.Conn); ok {
+		from = c.RemoteAddr().String()
+	}
+	slog.Info("forward: session open", "from", from)
 
 	var once sync.Once
 	shut := func() { once.Do(func() { local.Close(); c.CloseNow() }) }
@@ -148,6 +170,18 @@ func bridge(ctx context.Context, local net.Conn, target string, tlsCfg *tls.Conf
 	io.Copy(local, remote)
 	slog.Info("forward: session closed")
 }
+
+// stdioConn presents this process's standard streams as the same
+// io.ReadWriteCloser the listener hands to bridge, so --stdio is one more
+// source of a single connection rather than a second copy of the pump.
+type stdioConn struct{}
+
+func (stdioConn) Read(p []byte) (int, error)  { return os.Stdin.Read(p) }
+func (stdioConn) Write(p []byte) (int, error) { return os.Stdout.Write(p) }
+
+// Closing stdin is what unblocks the read half; stdout belongs to the parent
+// process and is left alone.
+func (stdioConn) Close() error { return os.Stdin.Close() }
 
 // forwardURL turns the relay's http(s) address into the ws(s) endpoint for one
 // service on one agent.

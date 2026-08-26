@@ -62,8 +62,15 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 	if err != nil {
 		return err
 	}
+	// An agent with no identity still starts, serves its control socket, and
+	// reports why it cannot connect. Exiting here instead looked tidier and was
+	// badly wrong: `beacon status` had nothing to talk to, and the updater --
+	// which verifies a new binary by asking the agent to answer, not to be
+	// connected -- waited out its timeout and rolled every release back. A
+	// fleet could not move forward at all.
 	if cfg.Assertion == "" {
-		return fmt.Errorf("this agent is not enrolled with %s: run `beacon install` again", cfg.Server)
+		slog.Warn("this agent has no identity with the relay and cannot connect until it does",
+			"relay", cfg.Server, "fix", "run `beacon enroll` on this machine")
 	}
 
 	tlsCfg, err := tlsConfig(cfg.CAFile)
