@@ -20,7 +20,7 @@ func TestVerifyAcceptsAGenuineSignature(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	v := &vault{pubKeys: map[int]ed25519.PublicKey{1: pub}}
 
-	msg := []byte(`{"agent":"build-vm-01"}`)
+	msg := []byte(`{"agent":"target-01"}`)
 	if !v.Verify(msg, signAs(1, priv, msg)) {
 		t.Fatal("a genuine signature was rejected")
 	}
@@ -31,7 +31,7 @@ func TestVerifyRejectsTamperingAndForgery(t *testing.T) {
 	_, other, _ := ed25519.GenerateKey(nil)
 	v := &vault{pubKeys: map[int]ed25519.PublicKey{1: pub}}
 
-	msg := []byte(`{"agent":"build-vm-01"}`)
+	msg := []byte(`{"agent":"target-01"}`)
 	good := signAs(1, priv, msg)
 
 	if v.Verify([]byte(`{"agent":"attacker"}`), good) {

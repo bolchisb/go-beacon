@@ -348,7 +348,7 @@ The same binary serves two roles, and confusing them is the most common mistake.
 Copy the binary for the target's platform out of `dist/`, then:
 
 ```sh
-beacon install --server https://relay.example.com --id build-vm-01
+beacon install --server https://relay.example.com --id target-01
 ```
 
 It asks for an operator username and password, enrols the machine, then
@@ -523,7 +523,7 @@ colours and window resizing all behave.
 ### A shell in your own terminal
 
 ```sh
-beacon ssh build-vm-01
+beacon ssh target-01
 ```
 
 This carries the same stream the dashboard uses and lands in a shell the same
@@ -541,7 +541,7 @@ which means the target's own sshd and its own credentials. Open the port in one
 terminal and leave it running:
 
 ```sh
-beacon forward build-vm-01 ssh --listen 127.0.0.1:2222
+beacon forward target-01 ssh --listen 127.0.0.1:2222
 ```
 
 Then work against it from anywhere else, as usual:
@@ -567,7 +567,7 @@ stdin and stdout instead of a listener, which is what ssh's `ProxyCommand`
 expects, so ssh starts and stops the tunnel itself:
 
 ```
-Host build-vm-01
+Host target-01
     User you
     ProxyCommand beacon forward %h ssh --stdio
     ForwardAgent yes
@@ -575,7 +575,7 @@ Host build-vm-01
 
 `%h` is the host you typed, so naming the block after the agent id lets one
 entry cover several machines: list them on the `Host` line, or match them with
-a pattern. Then `ssh build-vm-01` works with no second terminal, and so does
+a pattern. Then `ssh target-01` works with no second terminal, and so does
 everything built on ssh: `scp`, `rsync`, `git`, VS Code Remote-SSH, JetBrains
 Gateway.
 
@@ -595,7 +595,7 @@ The relay answers on one port and nothing else, so the port a desktop client
 needs is opened next to that client rather than on the relay:
 
 ```sh
-beacon forward build-vm-01 rdp --listen 127.0.0.1:3390
+beacon forward target-01 rdp --listen 127.0.0.1:3390
 ```
 
 Point Remote Desktop at `127.0.0.1:3390`. Each connection to that port becomes
@@ -633,7 +633,7 @@ It gains seven tools, each naming the agent it should act on:
 Call `list_agents` first; every other tool needs an id from it. From there it is
 ordinary conversation:
 
-> on build-vm-01, run the test suite and show me what failed
+> on target-01, run the test suite and show me what failed
 
 The assistant runs the command on that machine, reads the files it needs and
 reports back, without anyone opening a terminal.
@@ -647,7 +647,7 @@ reports back, without anyone opening a terminal.
 Two of those tools move text between machines, which is the quickest way to carry
 a stack trace or a connection string across:
 
-> read the clipboard on build-vm-01
+> read the clipboard on target-01
 
 > [!NOTE]
 > Windows and macOS always have a clipboard. A headless Linux host has none, and

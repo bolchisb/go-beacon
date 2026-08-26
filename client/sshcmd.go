@@ -27,7 +27,7 @@ import (
 // the target's own sshd instead: `beacon forward AGENT ssh`.
 func cmdSSH(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: beacon ssh AGENT   (for example: beacon ssh build-vm-01)")
+		return fmt.Errorf("usage: beacon ssh AGENT   (for example: beacon ssh target-01)")
 	}
 	agent := args[0]
 

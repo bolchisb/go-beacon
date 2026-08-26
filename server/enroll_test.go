@@ -59,12 +59,12 @@ func connectAs(t *testing.T, s *Server, assertion string, priv ed25519.PrivateKe
 }
 
 func TestAnEnrolledAgentIsAccepted(t *testing.T) {
-	s, priv, assertion := enrolled(t, "build-vm-01", time.Now().Add(time.Hour))
+	s, priv, assertion := enrolled(t, "target-01", time.Now().Add(time.Hour))
 	id, err := s.verifyAgent(connectAs(t, s, assertion, priv))
 	if err != nil {
 		t.Fatalf("a valid agent was refused: %v", err)
 	}
-	if id != "build-vm-01" {
+	if id != "target-01" {
 		t.Errorf("id is %q, want the one in the assertion", id)
 	}
 }
@@ -72,7 +72,7 @@ func TestAnEnrolledAgentIsAccepted(t *testing.T) {
 func TestIdentityComesFromTheAssertionNotTheHeader(t *testing.T) {
 	// The hello header is attacker-controlled. If it could name the agent, any
 	// enrolled machine could receive another machine's commands.
-	s, priv, assertion := enrolled(t, "build-vm-01", time.Now().Add(time.Hour))
+	s, priv, assertion := enrolled(t, "target-01", time.Now().Add(time.Hour))
 	r := connectAs(t, s, assertion, priv)
 	r.Header.Set(protocol.HeaderAgentID, "production-db")
 
@@ -80,13 +80,13 @@ func TestIdentityComesFromTheAssertionNotTheHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "build-vm-01" {
+	if id != "target-01" {
 		t.Errorf("id is %q, want the assertion to win over the header", id)
 	}
 }
 
 func TestAnUnenrolledAgentIsRefused(t *testing.T) {
-	s, _, _ := enrolled(t, "build-vm-01", time.Now().Add(time.Hour))
+	s, _, _ := enrolled(t, "target-01", time.Now().Add(time.Hour))
 	r := httptest.NewRequest(http.MethodGet, protocol.ConnectPath, nil)
 	if _, err := s.verifyAgent(r); err == nil {
 		t.Fatal("an agent with no assertion was accepted")
@@ -94,7 +94,7 @@ func TestAnUnenrolledAgentIsRefused(t *testing.T) {
 }
 
 func TestATamperedAssertionIsRefused(t *testing.T) {
-	s, priv, assertion := enrolled(t, "build-vm-01", time.Now().Add(time.Hour))
+	s, priv, assertion := enrolled(t, "target-01", time.Now().Add(time.Hour))
 
 	// Re-point the assertion at another machine, keeping the signature.
 	_, a, err := protocol.ParseSignedAssertion(assertion)
@@ -114,7 +114,7 @@ func TestATamperedAssertionIsRefused(t *testing.T) {
 func TestAnotherKeyCannotUseTheAssertion(t *testing.T) {
 	// Holding a copy of someone's assertion is not enough; the private key
 	// never left the machine it was generated on.
-	s, _, assertion := enrolled(t, "build-vm-01", time.Now().Add(time.Hour))
+	s, _, assertion := enrolled(t, "target-01", time.Now().Add(time.Hour))
 	_, impostor, _ := ed25519.GenerateKey(nil)
 
 	if _, err := s.verifyAgent(connectAs(t, s, assertion, impostor)); err == nil {
@@ -123,7 +123,7 @@ func TestAnotherKeyCannotUseTheAssertion(t *testing.T) {
 }
 
 func TestAChallengeCannotBeReplayed(t *testing.T) {
-	s, priv, assertion := enrolled(t, "build-vm-01", time.Now().Add(time.Hour))
+	s, priv, assertion := enrolled(t, "target-01", time.Now().Add(time.Hour))
 	r := connectAs(t, s, assertion, priv)
 
 	if _, err := s.verifyAgent(r); err != nil {
@@ -136,7 +136,7 @@ func TestAChallengeCannotBeReplayed(t *testing.T) {
 }
 
 func TestAnExpiredAssertionIsRefused(t *testing.T) {
-	s, priv, assertion := enrolled(t, "build-vm-01", time.Now().Add(-time.Minute))
+	s, priv, assertion := enrolled(t, "target-01", time.Now().Add(-time.Minute))
 	_, err := s.verifyAgent(connectAs(t, s, assertion, priv))
 	if err == nil {
 		t.Fatal("an expired assertion was accepted")
