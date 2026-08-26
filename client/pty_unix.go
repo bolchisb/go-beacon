@@ -20,10 +20,18 @@ func startPTY() (ptyTerm, error) {
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	cmd := exec.Command(shell, "-l")
+	return startPTYWith(shell, []string{"-l"}, nil)
+}
+
+// startPTYWith runs a specific program on a pty. The ssh server needs this to
+// honour a client's TERM and to run a requested command, rather than always
+// dropping into a login shell.
+func startPTYWith(name string, args []string, env []string) (ptyTerm, error) {
+	cmd := exec.Command(name, args...)
 	// Without TERM the shell assumes a dumb terminal and every full-screen
 	// program the developer actually needs refuses to draw.
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, env...)
 
 	f, err := pty.Start(cmd)
 	if err != nil {
