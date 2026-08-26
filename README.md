@@ -403,6 +403,7 @@ flags — later wins.
 | `--server` | `BEACON_SERVER` | `http://127.0.0.1:8080` | Relay URL |
 | `--id` | `BEACON_AGENT_ID` | Hostname | Identity shown in the dashboard |
 | `--ca-file` | `BEACON_CA_FILE` | — | Extra trusted CA bundle (HTTPS only) |
+| `--token` | `BEACON_TOKEN` | — | Operator token for `beacon ssh` and `beacon forward`; a target machine does not need one |
 
 One setting has no flag and no environment variable, because it belongs to the
 machine rather than to a session: `services` in the config file lists what the
@@ -443,6 +444,18 @@ Substitute the file name for your platform: `beacon-linux-amd64`,
 `beacon forward` needs no root: it listens on a high port and exits on Ctrl-C.
 Point it at the relay with `--server`, or save that once with
 `beacon config set server=https://relay.example.com`.
+
+Both `beacon ssh` and `beacon forward` go through the relay's API, so they need
+an operator token where the relay has a gate. The agent tunnel does not — an
+installed agent authenticates on its own terms and never needs one.
+
+```sh
+beacon config set token=<operator token>
+```
+
+`--token` and `BEACON_TOKEN` work too, and take precedence in that order. Given
+a relay that wants one and a client that has none, both commands say so rather
+than reporting a bare refusal.
 
 ## Usage
 

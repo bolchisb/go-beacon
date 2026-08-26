@@ -34,6 +34,7 @@ func cmdSSH(args []string) error {
 	fs := flag.NewFlagSet("beacon ssh", flag.ExitOnError)
 	fs.String(keyServer, "", "relay URL, http:// or https://")
 	fs.String(keyCA, "", "PEM bundle trusted in addition to the system roots")
+	fs.String(keyToken, "", "operator token for the relay's API")
 	fs.Usage = func() {
 		usageFor(fs, "beacon ssh AGENT", "Open a terminal on a machine, in this terminal.")
 	}
@@ -62,9 +63,16 @@ func cmdSSH(args []string) error {
 	defer stop()
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
-	c, resp, err := websocket.Dial(ctx, target, &websocket.DialOptions{HTTPClient: client})
+	c, resp, err := websocket.Dial(ctx, target, &websocket.DialOptions{
+		HTTPClient: client,
+		HTTPHeader: apiHeader(cfg.Token),
+	})
 	if err != nil {
 		if resp != nil {
+			if resp.StatusCode == http.StatusUnauthorized {
+				return fmt.Errorf("the relay wants an operator token: set one with " +
+					"`beacon config set token=...`, or pass --token")
+			}
 			return fmt.Errorf("relay refused the session: %s", resp.Status)
 		}
 		return err

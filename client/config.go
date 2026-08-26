@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,12 @@ type Config struct {
 	Server  string `json:"server"`
 	AgentID string `json:"agent_id"`
 	CAFile  string `json:"ca_file,omitempty"`
+
+	// Token authenticates this machine to the relay's API, which is what
+	// `beacon ssh` and `beacon forward` go through. The agent tunnel does not
+	// use it -- that path authenticates on its own terms -- so a target machine
+	// has no reason to carry one and only a workstation needs it set.
+	Token string `json:"token,omitempty"`
 
 	// AutoUpdate is a pointer so that an absent field means enabled: an agent
 	// on a machine nobody can reach must not be left behind by a config written
@@ -45,9 +52,10 @@ const (
 	keyServer = "server"
 	keyID     = "id"
 	keyCA     = "ca-file"
+	keyToken  = "token"
 )
 
-var configKeys = []string{keyServer, keyID, keyCA}
+var configKeys = []string{keyServer, keyID, keyCA, keyToken}
 
 type resolved struct {
 	Config
@@ -86,11 +94,13 @@ func loadConfig(flags map[string]string) (*resolved, error) {
 		r.set(keyServer, fc.Server, fromFile)
 		r.set(keyID, fc.AgentID, fromFile)
 		r.set(keyCA, fc.CAFile, fromFile)
+		r.set(keyToken, fc.Token, fromFile)
 	}
 
 	r.set(keyServer, os.Getenv("BEACON_SERVER"), fromEnv)
 	r.set(keyID, os.Getenv("BEACON_AGENT_ID"), fromEnv)
 	r.set(keyCA, os.Getenv("BEACON_CA_FILE"), fromEnv)
+	r.set(keyToken, os.Getenv("BEACON_TOKEN"), fromEnv)
 
 	for k, v := range flags {
 		r.set(k, v, fromFlag)
@@ -110,6 +120,8 @@ func (r *resolved) set(key, value string, src source) {
 		r.AgentID = value
 	case keyCA:
 		r.CAFile = value
+	case keyToken:
+		r.Token = value
 	default:
 		return
 	}
@@ -129,8 +141,22 @@ func (r *resolved) value(key string) string {
 		return r.AgentID
 	case keyCA:
 		return r.CAFile
+	case keyToken:
+		return r.Token
 	}
 	return ""
+}
+
+// apiHeader carries the operator credential on requests to the relay's API.
+// Nil when there is no token, which keeps the header absent rather than empty
+// on a relay that has no gate.
+func apiHeader(token string) http.Header {
+	if token == "" {
+		return nil
+	}
+	h := http.Header{}
+	h.Set("Authorization", "Bearer "+token)
+	return h
 }
 
 func readConfigFile(path string) (Config, bool, error) {
