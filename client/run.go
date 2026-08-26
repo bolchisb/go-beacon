@@ -63,7 +63,7 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 		return err
 	}
 	if cfg.Assertion == "" {
-		return fmt.Errorf("this agent is not enrolled with %s: run `beacon install` again", cfg.Server)
+		return fmt.Errorf("this agent has no identity with %s: run `beacon enroll`", cfg.Server)
 	}
 
 	tlsCfg, err := tlsConfig(cfg.CAFile)

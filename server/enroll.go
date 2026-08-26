@@ -186,7 +186,7 @@ func operatorLabel(u string) string {
 func (s *Server) verifyAgent(r *http.Request) (string, error) {
 	raw := r.Header.Get(protocol.HeaderAssertion)
 	if raw == "" {
-		return "", fmt.Errorf("no assertion: this agent has not been enrolled")
+		return "", fmt.Errorf("this agent has not been enrolled: run `beacon enroll` on it")
 	}
 	signed, a, err := protocol.ParseSignedAssertion(raw)
 	if err != nil {
@@ -196,7 +196,8 @@ func (s *Server) verifyAgent(r *http.Request) (string, error) {
 		return "", fmt.Errorf("the assertion is not signed by this relay's Vault")
 	}
 	if a.Expired(time.Now()) {
-		return "", fmt.Errorf("the assertion expired on %s; re-enrol this agent", a.ExpiresAt.Format(time.RFC3339))
+		return "", fmt.Errorf("the assertion expired on %s: run `beacon enroll` on it again",
+			a.ExpiresAt.Format(time.RFC3339))
 	}
 
 	nonce := r.Header.Get(protocol.HeaderChallenge)

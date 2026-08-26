@@ -359,10 +359,19 @@ machine. What stays behind is a keypair generated locally and the relay's
 signed statement that it belongs to this agent id — so a compromised target
 yields its own identity and nothing that reaches any other machine.
 
+`beacon enroll` does the same thing on a machine that is already installed —
+after an assertion expires, or when pointing an agent at a different relay —
+without touching the service.
+
 > [!NOTE]
 > Enrolment needs the relay reachable and its Vault unsealed. An agent that is
 > already enrolled keeps connecting through a Vault outage; only enrolling a new
 > one has to wait.
+
+> [!IMPORTANT]
+> `beacon login` is a different thing and does not enrol anything. It signs an
+> **operator** in, so that `beacon ssh` and `beacon forward` work from that
+> machine. An agent needs `beacon enroll`.
 
 ### Agent commands
 
@@ -371,6 +380,7 @@ yields its own identity and nothing that reaches any other machine.
 | `beacon run` | Run in the foreground instead of as a service |
 | `beacon status` | Show whether the agent is connected, and its round-trip time |
 | `beacon config` | Show every setting and where its value came from |
+| `beacon enroll` | Give this machine an identity with the relay, without reinstalling the service |
 | `beacon login` / `logout` | Sign in to the relay with the dashboard's username and password |
 | `beacon ssh` | Open a terminal on a machine, in this terminal |
 | `beacon forward` | Open a local port that leads to a service on a remote machine |
@@ -629,7 +639,7 @@ a stack trace or a connection string across:
 
 | Step | What it adds |
 | --- | --- |
-| Credential renewal | Assertions last 90 days and are re-issued by running `beacon install` again. Renewing over the tunnel the agent already holds, with a grace window on the renewal path only, would remove the visit. |
+| Credential renewal | Assertions last 90 days and are re-issued by `beacon enroll`, which needs someone on the machine. Renewing over the tunnel the agent already holds, with a grace window on the renewal path only, would remove the visit. |
 | Revocation | Refusing one agent without waiting for its assertion to expire, and without touching the rest. |
 | Per-operator identity | Named operators rather than one shared account, so actions are attributable and one person can be removed without rotating for everyone. |
 
