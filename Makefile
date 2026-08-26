@@ -1,18 +1,30 @@
 # No Go toolchain is required on the host: everything runs in containers.
-COMPOSE ?= podman compose
+# Either engine works; podman wins if both are installed. Override with
+# `make ENGINE=docker <target>`.
+ENGINE ?= $(shell for e in podman docker; do command -v $$e >/dev/null 2>&1 && { echo $$e; break; }; done)
+ifeq ($(ENGINE),)
+$(error no container engine found: install podman or docker, or pass ENGINE=...)
+endif
+
+# `podman compose` / `docker compose` on modern installs, the standalone
+# `podman-compose` / `docker-compose` binary otherwise.
+COMPOSE ?= $(shell \
+	if $(ENGINE) compose version >/dev/null 2>&1; then echo "$(ENGINE) compose"; \
+	elif command -v $(ENGINE)-compose >/dev/null 2>&1; then echo "$(ENGINE)-compose"; \
+	else echo "$(ENGINE) compose"; fi)
 GO_IMAGE ?= golang:1.26.6-alpine3.23
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # Named volumes keep the module and build caches between runs; without them
 # every cross-compile starts from zero.
-GO_RUN = podman run --rm \
+GO_RUN = $(ENGINE) run --rm \
 	-v $(CURDIR):/src:z \
 	-v go-beacon-modcache:/go/pkg/mod \
 	-v go-beacon-buildcache:/root/.cache/go-build \
 	-w /src -e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 # The agent ships as plain binaries: it runs on developer and target machines,
-# not in podman. Pure Go and CGO_ENABLED=0 means all six come out of one
+# not in a container. Pure Go and CGO_ENABLED=0 means all six come out of one
 # linux container.
 PLATFORMS ?= windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
