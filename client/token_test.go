@@ -131,3 +131,30 @@ func TestLoginSaysSoWhenThereIsNoAccountYet(t *testing.T) {
 		t.Errorf("got %v, want a message pointing at the dashboard", err)
 	}
 }
+
+func TestConfigFallsBackToTheUserFileWhenTheMachineOneIsNotOurs(t *testing.T) {
+	// A person running `beacon login` on their laptop must not need root to
+	// record their own session, and ssh runs ProxyCommand as them rather than
+	// as root, so a root-owned machine file is unreadable exactly when it
+	// matters.
+	dir := t.TempDir()
+	unwritable := filepath.Join(dir, "no-such-dir", "cannot", "config.json")
+
+	if writableConfig(filepath.Join(dir, "fine.json")) != true {
+		t.Error("a writable path was reported unwritable")
+	}
+	// A path under a directory we cannot create.
+	if err := os.WriteFile(filepath.Join(dir, "no-such-dir"), []byte("file, not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if writableConfig(unwritable) {
+		t.Error("an unwritable path was reported writable")
+	}
+}
+
+func TestUserConfigPathIsSetOnEveryPlatform(t *testing.T) {
+	// Empty here would silently disable the fallback above.
+	if userConfigPath() == "" {
+		t.Fatal("no per-user config path on this platform")
+	}
+}
