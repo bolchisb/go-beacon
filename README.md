@@ -373,6 +373,37 @@ without touching the service.
 > **operator** in, so that `beacon ssh` and `beacon forward` work from that
 > machine. An agent needs `beacon enroll`.
 
+### Running under a user account on Windows
+
+LocalSystem is the default and the right choice for a machine nobody sits at.
+It is also why WSL is out of reach from an installed agent: distributions
+belong to a user account, and LocalSystem is not one.
+
+```sh
+beacon install --run-as .\alice     # a service, running as alice
+beacon install --user                # no service, no elevation at all
+```
+
+| | `--run-as` | `--user` |
+| --- | --- | --- |
+| Answers after a reboot with nobody signed in | Yes | **No** |
+| Needs an administrator to install | Yes | No |
+| Binary and config | `%ProgramFiles%`, `%ProgramData%` | `%LOCALAPPDATA%`, `%APPDATA%` |
+| WSL | That account's distributions | The signed-in user's |
+| Secret at rest | The account password, held by the service manager | None |
+
+`--run-as` also needs the account to hold the **Log on as a service** right.
+Granting it needs the LSA policy APIs, so the installer does not attempt it; if
+registration fails for that reason it names the right and where to grant it.
+
+Choose `--user` for a developer's own machine, where somebody is signed in
+anyway and WSL is the point. Choose `--run-as`, or plain LocalSystem, for
+anything that has to answer at three in the morning.
+
+`beacon start`, `stop`, `restart` and `uninstall` detect which of the two is
+installed. A per-user install needed no elevation to create and needs none to
+remove.
+
 ### Agent commands
 
 | Command | Purpose |
@@ -386,7 +417,7 @@ without touching the service.
 | `beacon forward` | Open a local port that leads to a service on a remote machine |
 | `beacon update` | Replace the binary with the latest release, verify it, roll back if it fails |
 | `beacon start` / `stop` / `restart` | Control the installed service |
-| `beacon uninstall` | Remove the service and the binary |
+| `beacon uninstall` | Remove the service and the binary, or the per-user install if that is what is there |
 | `beacon version` | Print the build version |
 
 ### Automatic updates
@@ -725,8 +756,11 @@ Two things worth knowing about how this behaves:
 
 > [!NOTE]
 > On a Windows target you land in a Windows shell, with that machine's
-> toolchain. If the one you need lives in WSL, point the `ssh` service at the
-> sshd inside the distribution instead of at the host's.
+> toolchain. For the one inside WSL, connect as `wsl@` over the `dev` service.
+> That works only where the agent can reach a distribution, which an installed
+> service under LocalSystem cannot — see [Running under a user account on
+> Windows](#running-under-a-user-account-on-windows). Pointing the `ssh`
+> service at the sshd inside the distribution is the other way round to it.
 
 #### The other routes, from the same setup
 
