@@ -3,20 +3,13 @@
 [![server image](https://github.com/bolchisb/go-beacon/actions/workflows/server-image.yml/badge.svg)](https://github.com/bolchisb/go-beacon/actions/workflows/server-image.yml)
 [![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: source-available](https://img.shields.io/badge/license-source--available-orange)](LICENSE.md)
-[![Platforms: Windows, Linux, macOS](https://img.shields.io/badge/platforms-windows%20%7C%20linux%20%7C%20macos-lightgrey)](#requirements)
+[![Platforms: Windows, Linux, macOS](https://img.shields.io/badge/platforms-windows%20%7C%20linux%20%7C%20macos-lightgrey)](#what-it-needs)
 
 **Develop on your own laptop. Run in the customer's environment.**
 
-go-beacon is a client/server relay written in Go. It gives a development team a
-terminal, a file transfer, a forwarded port or an AI assistant on a machine
-inside a customer's environment — a VM behind NAT, a firewalled build host, a
-locked-down cloud subnet — without a VPN, an inbound firewall rule, or a public
-IP on the target.
-
-A small agent is installed on the target and dials **outbound** to the relay. The
-relay holds that connection open and multiplexes everything over it. Developers
-work against the customer's real environment from their own workstation, and when
-a defect only reproduces there, the same tunnel is the debugging channel.
+A Go relay and agent that put a terminal, a file transfer, a forwarded port or
+an AI assistant on a machine inside someone else's network — with no inbound
+firewall rule, no VPN and no public IP on the target.
 
 > [!IMPORTANT]
 > Nothing reaches this relay unauthenticated. Operators sign in with a username
@@ -29,194 +22,174 @@ a defect only reproduces there, the same tunnel is the debugging channel.
 > individuals in personal, non-commercial use. Any use by an organization of any
 > kind requires a paid commercial license. See [Licensing](#licensing).
 
+
 ## Contents
 
-- [At a glance](#at-a-glance)
-- [How it works](#how-it-works)
-- [Capabilities](#capabilities)
-- [How this was built](#how-this-was-built)
-- [Security](#security)
-- [Requirements](#requirements)
-- [Running the relay](#running-the-relay)
+- [What this is](#what-this-is)
+- [Installing an agent on a remote machine](#installing-an-agent-on-a-remote-machine)
+  - [Running under a user account on Windows](#running-under-a-user-account-on-windows)
+- [Running the relay in your network](#running-the-relay-in-your-network)
   - [Operator authentication](#operator-authentication)
-- [Roles: target machine and workstation](#roles-target-machine-and-workstation)
-- [Installing on a target machine](#installing-on-a-target-machine)
-- [Setting up your workstation](#setting-up-your-workstation)
-- [Usage](#usage)
-- [Roadmap](#roadmap)
+  - [How the relay gets its own credentials](#how-the-relay-gets-its-own-credentials)
+  - [What it needs](#what-it-needs)
+- [Reference](#reference)
+  - [Architecture](#architecture)
+  - [Capabilities](#capabilities)
+  - [Working on a remote machine](#working-on-a-remote-machine)
+  - [Agent commands](#agent-commands)
+  - [Automatic updates](#automatic-updates)
+  - [Logging](#logging)
+  - [Configuration](#configuration)
+  - [Your own workstation](#your-own-workstation)
+  - [Security](#security)
+  - [Roadmap](#roadmap)
+  - [How this was built](#how-this-was-built)
 - [Licensing](#licensing)
 
-## At a glance
+## What this is
 
-| | |
-| --- | --- |
-| Toolchain | Go 1.26, pure Go, `CGO_ENABLED=0` |
-| Artifacts | One static binary per platform; the relay also ships as a container image |
-| Platforms | Windows, Linux and macOS on amd64 and arm64 |
-| Network requirement | A single outbound TCP connection from the target to the relay |
-| Ports opened on the target | None |
-| Transport security | TLS, terminated by the relay or by a proxy in front of it |
-| Operator authentication | Username and password, stored in Vault, set up on first run |
-| Agent authentication | Per-agent key, generated on the machine, bound by a Vault-signed assertion |
-| Runtime dependencies | None on the agent. The relay needs a Vault, shipped alongside it |
-| Development | AI-assisted — see [How this was built](#how-this-was-built) |
-| License | Source-available, dual-licensed |
+A development team needs a shell, a file transfer or an editor on a machine
+inside somebody else's network. The machine is behind NAT, or a firewall, or in
+a locked-down subnet. Nobody will open an inbound port for you, and a VPN is
+weeks of paperwork.
 
-## How it works
+go-beacon inverts the direction. A small agent on that machine dials **out** to
+a relay you run. The relay holds the connection open and multiplexes everything
+across it, so one outbound TCP connection carries a terminal, a file transfer, a
+forwarded port and an AI assistant at once.
 
-```
-developer workstation                relay                 target machine
-          │                            │                          │
-          │  ─ dashboard / terminal ─► │                          │
-          │  ─ AI assistant (MCP) ───► │ ◄─── outbound tunnel ────│  agent
-          │  ─ local port (ssh/rdp) ─► │       (multiplexed)      │
-          │                            │                          │
-                                                       no inbound port is opened
+```mermaid
+flowchart LR
+    laptop["Your laptop"]
+    relay["Relay<br/><i>your network</i>"]
+    agent["Agent<br/><i>customer machine</i>"]
+
+    laptop -- "https" --> relay
+    agent -- "outbound tunnel" --> relay
+    relay -. "terminal · files · ports · MCP" .-> agent
 ```
 
-- **Outbound only.** The agent initiates the connection. Nothing is exposed on
-  the customer's network.
-- **One connection, one port.** A terminal, a command and a file transfer are
-  each a stream inside the connection the agent already opened. There is no
-  second port to open, on either end.
-- **Self-healing.** The agent supervises its own session and reconnects with
-  exponential backoff and jitter. A relay restart requires nobody to log into the
-  target machine.
-- **Small and portable.** One static binary per platform, pure Go, no runtime
-  dependencies.
-- **Operator dashboard.** A built-in web UI shows connected agents, transferred
-  bytes and a live activity feed.
+Nothing is opened on the customer's machine and nothing is exposed on their
+network. Everything travels back up the connection the agent already made.
 
-## Capabilities
+Three things follow from that shape, and they are the reason to pick this over
+a jump host:
 
-| Capability | Description | Status |
+- **No inbound rule, ever.** The only requirement on the target is that it can
+  reach your relay over HTTPS.
+- **One connection, many uses.** A terminal, an SFTP session and a forwarded
+  remote-desktop port are streams inside it, not separate holes.
+- **It repairs itself.** The agent reconnects with backoff, and updates itself
+  from GitHub over a channel independent of the tunnel — so a machine that can
+  no longer connect can still be fixed.
+
+## Installing an agent on a remote machine
+
+Work out which build this machine needs. `uname -m` reports several spellings
+of the same two architectures, so match rather than assume:
+
+```sh
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$(uname -m)" in
+  x86_64|amd64)  arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "no build for $(uname -m)"; exit 1 ;;
+esac
+```
+
+Then fetch it, check it, and put it somewhere root can run it:
+
+```sh
+curl -fsSLO "https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-$os-$arch"
+curl -fsSLO "https://github.com/bolchisb/go-beacon/releases/latest/download/SHA256SUMS"
+grep " beacon-$os-$arch$" SHA256SUMS | shasum -a 256 -c -
+sudo install -m 0755 "beacon-$os-$arch" /usr/local/bin/beacon
+```
+
+> [!IMPORTANT]
+> `/usr/local/bin`, not `~/bin`. Installing an agent needs root, and `sudo`
+> replaces `PATH` with a safe one that does not include your home directory —
+> so a binary in `~/bin` gives `sudo: beacon: command not found`, having worked
+> perfectly a moment earlier without `sudo`.
+
+```sh
+sudo beacon install --server https://relay.example.com --id target-01
+```
+
+It asks for an operator username and password, enrols the machine, then
+registers it as a system service and starts it.
+
+The credentials are used for that one request and are never written to the
+machine. What stays behind is a keypair generated locally and the relay's
+signed statement that it belongs to this agent id — so a compromised target
+yields its own identity and nothing that reaches any other machine.
+
+`beacon enroll` does the same thing on a machine that is already installed —
+after an assertion expires, or when pointing an agent at a different relay —
+without touching the service.
+
+> [!NOTE]
+> Enrolment needs the relay reachable and its Vault unsealed. An agent that is
+> already enrolled keeps connecting through a Vault outage; only enrolling a new
+> one has to wait.
+
+> [!IMPORTANT]
+> `beacon login` is a different thing and does not enrol anything. It signs an
+> **operator** in, so that `beacon ssh` and `beacon forward` work from that
+> machine. An agent needs `beacon enroll`.
+
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant You as You, on the machine
+    participant Agent as beacon
+    participant Relay
+    participant Vault
+
+    You->>Agent: beacon install --server ...
+    Agent->>Agent: generate a keypair
+    Note over Agent: the private key never leaves this machine
+    You->>Agent: operator username and password
+    Agent->>Relay: agent id, public key, credentials
+    Relay->>Vault: sign a statement binding id to key
+    Vault-->>Relay: signature
+    Relay-->>Agent: signed assertion
+    Note over Agent: credentials discarded, assertion kept
+```
+
+### Running under a user account on Windows
+
+LocalSystem is the default and the right choice for a machine nobody sits at.
+It is also why WSL is out of reach from an installed agent: distributions
+belong to a user account, and LocalSystem is not one.
+
+```sh
+beacon install --run-as .\alice     # a service, running as alice
+beacon install --per-user            # no service, no elevation at all
+```
+
+| | `--run-as` | `--per-user` |
 | --- | --- | --- |
-| Relay tunnel | Multiplexed, outbound-only agent sessions | Available |
-| Dashboard & API | Agent inventory, connectivity test, live event stream | Available |
-| Web terminal | Full interactive shell in a browser tab, one click from the dashboard | Available |
-| MCP bridge | Commands, files and clipboard on a target, driven by an AI assistant | Available |
-| Port forwarding | A local port that leads to a service on the target: ssh, remote desktop, or anything else it hosts | Available |
-| Clipboard | Read and replace the target's clipboard | Available (Windows, macOS) |
-| Operator authentication | Username and password gating the dashboard, the API and the MCP endpoint | Available |
-| Credential backend | Vault, unsealed automatically, issuing signed agent credentials | Available |
-| Agent enrolment | Authorised by operator credentials at install; the key is generated on the machine | Available |
-| Agent authentication | Vault-signed assertion plus a signed challenge on every connect | Available |
-| Per-operator identity | Named operators rather than one shared token | Planned |
+| Answers after a reboot with nobody signed in | Yes | **No** |
+| Needs an administrator to install | Yes | No |
+| Binary and config | `%ProgramFiles%`, `%ProgramData%` | `%LOCALAPPDATA%`, `%APPDATA%` |
+| WSL | That account's distributions | The signed-in user's |
+| Secret at rest | The account password, held by the service manager | None |
 
-## How this was built
+`--run-as` also needs the account to hold the **Log on as a service** right.
+Granting it needs the LSA policy APIs, so the installer does not attempt it; if
+registration fails for that reason it names the right and where to grant it.
 
-go-beacon is vibe-coded. It was designed and written with an AI assistant in the
-loop for most of it, and that is stated here for the same reason the security
-posture is: you should know what you are adopting.
+Choose `--per-user` for a developer's own machine, where somebody is signed in
+anyway and WSL is the point. Choose `--run-as`, or plain LocalSystem, for
+anything that has to answer at three in the morning.
 
-**Why that is worth something.** The capability surface in the table above —
-a cross-platform agent, native service integration on three operating systems, a
-self-updating fleet, a browser terminal, a port forwarder and an MCP bridge —
-is far more ground than a project this size would normally cover. Working this
-way is what made that scope reachable, and it is what keeps the turnaround on a
-reported bug measured in days rather than quarters. A fix costs about what a
-feature costs here.
+`beacon start`, `stop`, `restart` and `uninstall` detect which of the two is
+installed. A per-user install needed no elevation to create and needs none to
+remove.
 
-**What keeps it honest.** Generated code is not shipped on trust:
-
-- The mechanisms most likely to bite are the ones under test: the operator gate
-  and its session handling, credential loading, signature verification and key
-  rotation, update and rollback, process supervision, port forwarding, the ssh
-  command path, clipboard handling and config parsing. `make test` runs them;
-  `make vet` gates `go vet` and `gofmt` over the whole tree.
-- Hard failures get investigated to a root cause and written up rather than
-  patched until the symptom disappears — an upgrade handshake race, the Windows
-  auto-update path, the supervision loop. Those write-ups are kept internally.
-- Every release is built reproducibly from a tagged commit, refuses to build
-  from a dirty tree, and publishes `SHA256SUMS`.
-
-**What to expect.** Bugs. Particularly away from the paths that get daily use:
-unusual platforms, uncommon service configurations, the edges of the forwarding
-and update logic. This is young software and it has not been through a security
-audit or a formal review.
-
-> [!TIP]
-> Rough edges are the most useful thing you can send back. Open an issue with
-> the platform, the command and what the dashboard's event feed showed —
-> that is usually enough to reproduce it.
-
-## Security
-
-Understand the current posture before deploying go-beacon anywhere.
-
-### What is protected
-
-**Operator access.** The dashboard, the API and the MCP endpoint all grant
-command execution on every connected machine, so all three sit behind one gate.
-It is closed by default in the sense that matters: the exemption list names the
-agent tunnel and the health probe explicitly, and anything added later is
-protected until somebody deliberately opens it.
-
-A browser exchanges the token for a session cookie. There is no session store,
-because the relay has none: the cookie carries its own expiry and an HMAC over
-it, keyed by the operator token. A restart therefore signs nobody out, and
-rotating the token invalidates every outstanding session at once — which is also
-the only revocation there is until per-operator identity lands.
-
-**Credentials at rest.** The operator token is read from a mounted file rather
-than an environment variable, so it does not appear in `docker inspect`, in the
-process environment, or in anything that dumps either. The relay holds no Vault
-credential at all: Vault Agent exchanges a response-wrapped, single-use secret id
-for a short-lived token and keeps it renewed, and the relay only ever reads that
-file.
-
-**The agent's side of the tunnel.** The agent connects outbound and no port is
-opened on the target. A forwarded stream names a service, never an address, so an
-agent cannot be used as a general route into the network behind it.
-
-**Agent identity.** Each agent generates a keypair on its own machine and the
-private half never leaves it. Enrolment is authorised by an operator's username
-and password, typed once by whoever is installing, used for that one request and
-never stored on the target. What the machine keeps is a Vault-signed assertion
-binding its id to its key — an identity for itself and nothing that reaches any
-other machine.
-
-On every connection the agent signs a challenge the relay has just issued.
-Challenges are single use, so a captured handshake cannot be replayed, and the
-id comes from the assertion rather than from a header, so an enrolled machine
-cannot claim to be a different one. The relay verifies both without asking
-Vault, which is why a sealed Vault stops enrolment without disconnecting anyone.
-
-**The blast radius of a Vault outage.** The relay caches Vault's public keys, so
-a sealed or unreachable Vault stops enrolment and renewal but does not disconnect
-a fleet that is already running. That matters because the fleet is exactly the
-set of machines nobody can reach to fix.
-
-### What is not protected yet
-
-**One shared operator token.** There is no per-operator identity, no attribution
-of who did what, and no way to revoke one person without rotating for everyone.
-
-**No audit trail for operator actions.** Vault records credential issuance; the
-relay does not yet record who ran what.
-
-**Nothing here has been through a security audit.**
-
-### Deployment guidance
-
-- Set an operator token. Without one the relay starts, says so loudly in its
-  log, and serves all three surfaces to anyone who reaches it.
-- Keep the relay on a private interface, or behind an authenticating proxy, for
-  as long as agents remain unauthenticated.
-- Vault must never be reachable by agents. It is not published in the shipped
-  compose files, and it should stay that way: agents run on customer networks,
-  and exposing a Vault to them is a worse exposure than the relay itself.
-
-## Requirements
-
-| | |
-| --- | --- |
-| Relay host | Docker and Docker Compose. No Go toolchain required. A Vault runs alongside the relay and is started by the same compose file. |
-| Target machine | None. A single static binary, plus administrative rights to install the service. |
-| Workstation | None for the browser terminal and the MCP endpoint. The binary is needed only for `beacon ssh` and `beacon forward`. |
-| Building from source | Go 1.26 or later |
-
-## Running the relay
+## Running the relay in your network
 
 The relay runs in containers alongside a Vault; no Go toolchain is required on
 the host.
@@ -327,107 +300,410 @@ shares live on the relay host, in a volume of their own, next to the data they
 open. That is a deliberate trade for keeping the deployment self-contained, and
 it means the host is part of the trust boundary.
 
-## Roles: target machine and workstation
+### What it needs
 
-The same binary serves two roles, and confusing them is the most common mistake.
+| | |
+| --- | --- |
+| Relay host | Docker and Docker Compose. No Go toolchain required. A Vault runs alongside the relay and is started by the same compose file. |
+| Target machine | None. A single static binary, plus administrative rights to install the service. |
+| Workstation | None for the browser terminal and the MCP endpoint. The binary is needed only for `beacon ssh` and `beacon forward`. |
+| Building from source | Go 1.26 or later |
 
-| | Target machine | Your own machine |
+
+## Reference
+
+Everything below is here to be looked up rather than read through.
+
+### Architecture
+
+```
+developer workstation                relay                 target machine
+          │                            │                          │
+          │  ─ dashboard / terminal ─► │                          │
+          │  ─ AI assistant (MCP) ───► │ ◄─── outbound tunnel ────│  agent
+          │  ─ local port (ssh/rdp) ─► │       (multiplexed)      │
+          │                            │                          │
+                                                       no inbound port is opened
+```
+
+- **Outbound only.** The agent initiates the connection. Nothing is exposed on
+  the customer's network.
+- **One connection, one port.** A terminal, a command and a file transfer are
+  each a stream inside the connection the agent already opened. There is no
+  second port to open, on either end.
+- **Self-healing.** The agent supervises its own session and reconnects with
+  exponential backoff and jitter. A relay restart requires nobody to log into the
+  target machine.
+- **Small and portable.** One static binary per platform, pure Go, no runtime
+  dependencies.
+- **Operator dashboard.** A built-in web UI shows connected agents, transferred
+  bytes and a live activity feed.
+
+### Capabilities
+
+| Capability | Description | Status |
 | --- | --- | --- |
-| What you run | `beacon install`, once | `beacon forward`, when you need it |
-| How it runs | A system service, as root or LocalSystem | An ordinary foreground process |
-| Needs elevation | Yes | No |
-| Appears in the dashboard | Yes | No |
+| Relay tunnel | Multiplexed, outbound-only agent sessions | Available |
+| Dashboard & API | Agent inventory, connectivity test, live event stream | Available |
+| Web terminal | Full interactive shell in a browser tab, one click from the dashboard | Available |
+| MCP bridge | Commands, files and clipboard on a target, driven by an AI assistant | Available |
+| Port forwarding | A local port that leads to a service on the target: ssh, remote desktop, or anything else it hosts | Available |
+| Clipboard | Read and replace the target's clipboard | Available (Windows, macOS) |
+| Operator authentication | Username and password gating the dashboard, the API and the MCP endpoint | Available |
+| Credential backend | Vault, unsealed automatically, issuing signed agent credentials | Available |
+| Agent enrolment | Authorised by operator credentials at install; the key is generated on the machine | Available |
+| Agent authentication | Vault-signed assertion plus a signed challenge on every connect | Available |
+| Per-operator identity | Named operators rather than one shared token | Planned |
 
-> [!CAUTION]
-> **Do not run `beacon install` on your own laptop.** It would register the
-> laptop as a target: it would appear in the dashboard, and anyone who can reach
-> the relay would have a shell on it.
+### Working on a remote machine
 
-## Installing on a target machine
+Every route below needs the agent shown as **connected** in the dashboard.
 
-Work out which build this machine needs. `uname -m` reports several spellings
-of the same two architectures, so match rather than assume:
+#### Choosing a route
 
-```sh
-os=$(uname -s | tr '[:upper:]' '[:lower:]')
-case "$(uname -m)" in
-  x86_64|amd64)  arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
-  *) echo "no build for $(uname -m)"; exit 1 ;;
-esac
-```
+| You want to | Use | Needs the binary locally |
+| --- | --- | --- |
+| Look at something quickly | The browser terminal | No |
+| A shell in your own terminal | `beacon ssh` | Yes |
+| `scp`, `rsync`, ssh config | `beacon forward … ssh` | Yes |
+| Write code in their environment | VS Code over `beacon forward … ssh --stdio` | Yes |
+| A desktop | `beacon forward … rdp` | Yes |
+| Let an assistant do it | The MCP endpoint | No |
 
-Then fetch it, check it, and put it somewhere root can run it:
+#### Browser terminal
 
-```sh
-curl -fsSLO "https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-$os-$arch"
-curl -fsSLO "https://github.com/bolchisb/go-beacon/releases/latest/download/SHA256SUMS"
-grep " beacon-$os-$arch$" SHA256SUMS | shasum -a 256 -c -
-sudo install -m 0755 "beacon-$os-$arch" /usr/local/bin/beacon
-```
+Press **SSH** next to an agent in the dashboard. A new tab opens with a real
+terminal on that machine — a genuine pseudo-terminal, so full-screen programs,
+colours and window resizing all behave.
 
-> [!IMPORTANT]
-> `/usr/local/bin`, not `~/bin`. Installing an agent needs root, and `sudo`
-> replaces `PATH` with a safe one that does not include your home directory —
-> so a binary in `~/bin` gives `sudo: beacon: command not found`, having worked
-> perfectly a moment earlier without `sudo`.
+#### A shell in your own terminal
 
 ```sh
-sudo beacon install --server https://relay.example.com --id target-01
+beacon ssh target-01
 ```
 
-It asks for an operator username and password, enrols the machine, then
-registers it as a system service and starts it.
-
-The credentials are used for that one request and are never written to the
-machine. What stays behind is a keypair generated locally and the relay's
-signed statement that it belongs to this agent id — so a compromised target
-yields its own identity and nothing that reaches any other machine.
-
-`beacon enroll` does the same thing on a machine that is already installed —
-after an assertion expires, or when pointing an agent at a different relay —
-without touching the service.
+This carries the same stream the dashboard uses and lands in a shell the same
+way, with no password in between: the relay is the authority here, not the
+target's account database.
 
 > [!NOTE]
-> Enrolment needs the relay reachable and its Vault unsealed. An agent that is
-> already enrolled keeps connecting through a Vault outage; only enrolling a new
-> one has to wait.
+> That is also its limit. `beacon ssh` is not the ssh protocol, so it cannot
+> carry `scp` or `rsync`. For those, forward the target's own sshd.
 
-> [!IMPORTANT]
-> `beacon login` is a different thing and does not enrol anything. It signs an
-> **operator** in, so that `beacon ssh` and `beacon forward` work from that
-> machine. An agent needs `beacon enroll`.
+#### A real ssh client
 
-### Running under a user account on Windows
-
-LocalSystem is the default and the right choice for a machine nobody sits at.
-It is also why WSL is out of reach from an installed agent: distributions
-belong to a user account, and LocalSystem is not one.
+`scp`, `rsync`, `~/.ssh/config` and agent forwarding all need the real client,
+which means the target's own sshd and its own credentials. Open the port in one
+terminal and leave it running:
 
 ```sh
-beacon install --run-as .\alice     # a service, running as alice
-beacon install --per-user            # no service, no elevation at all
+beacon forward target-01 ssh --listen 127.0.0.1:2222
 ```
 
-| | `--run-as` | `--per-user` |
+Then work against it from anywhere else, as usual:
+
+```sh
+ssh -p 2222 you@127.0.0.1
+scp -P 2222 ./patch.diff you@127.0.0.1:/tmp/
+rsync -e 'ssh -p 2222' -av ./src/ you@127.0.0.1:/opt/app/
+```
+
+The target's own sshd authenticates, with the accounts and keys that machine
+already has, so this route **does** ask for a password unless your key is already
+in its `authorized_keys`. Nothing about your ssh client changes: it talks to a
+local port, and the bytes leave over 443.
+
+> [!WARNING]
+> Note the lower-case `-p`. `ssh -P` is silently ignored and connects to port 22
+> on your own machine instead, which looks like the tunnel asking for a password
+> when it is really your laptop.
+
+For something you use daily, drop the port. `--stdio` puts one session on
+stdin and stdout instead of a listener, which is what ssh's `ProxyCommand`
+expects, so ssh starts and stops the tunnel itself:
+
+```
+Host target-01
+    User you
+    ProxyCommand beacon forward %h ssh --stdio
+    ForwardAgent yes
+```
+
+`%h` is the host you typed, so naming the block after the agent id lets one
+entry cover several machines: list them on the `Host` line, or match them with
+a pattern. Then `ssh target-01` works with no second terminal, and so does
+everything built on ssh: `scp`, `rsync`, `git`, VS Code Remote-SSH, JetBrains
+Gateway.
+
+`ForwardAgent yes` is what keeps your git credentials out of the customer's
+environment. The key stays on your laptop and only signatures cross the tunnel,
+so `git push` from the target machine authenticates as you without a token ever
+being written there — and the traffic still leaves from inside their network.
+
+> [!WARNING]
+> Agent forwarding lends your key for the length of the session: anyone with
+> root on the target can use the socket while you are connected. Leave it off
+> for a machine you do not trust that far.
+
+#### Remote development
+
+This is the route that replaces working through a desktop. The files, the
+toolchain and the build stay on the target machine, with its view of the
+customer's git server and their internal services; the editor and the keyboard
+stay on your own laptop.
+
+There are two routes to it, and which one you want turns on a single question:
+does anything on the target need to act as *you*?
+
+| | `dev` — the agent's own server | `ssh` — the target's sshd |
 | --- | --- | --- |
-| Answers after a reboot with nobody signed in | Yes | **No** |
-| Needs an administrator to install | Yes | No |
-| Binary and config | `%ProgramFiles%`, `%ProgramData%` | `%LOCALAPPDATA%`, `%APPDATA%` |
-| WSL | That account's distributions | The signed-in user's |
-| Secret at rest | The account password, held by the service manager | None |
+| Needed on the target | Nothing beyond the agent | sshd, an account, your key in it |
+| Works on a stock Windows box | Yes | Only with the OpenSSH Server feature added |
+| Who authenticates | The relay already did | The target's own sshd |
+| Agent forwarding, so `git push` uses your key | **No** | Yes |
 
-`--run-as` also needs the account to hold the **Log on as a service** right.
-Granting it needs the LSA policy APIs, so the installer does not attempt it; if
-registration fails for that reason it names the right and where to grant it.
+Start with `dev`. Move to `ssh` when you hit the last row — pushing to the
+customer's git server from the remote terminal with the key on your laptop is
+the usual reason, and it is not a small one.
 
-Choose `--per-user` for a developer's own machine, where somebody is signed in
-anyway and WSL is the point. Choose `--run-as`, or plain LocalSystem, for
-anything that has to answer at three in the morning.
+##### The short route: the agent's own server
 
-`beacon start`, `stop`, `restart` and `uninstall` detect which of the two is
-installed. A per-user install needed no elevation to create and needs none to
-remove.
+Nothing to install or configure on the target. The agent answers SSH itself.
+
+```sh
+beacon forward target-01 dev --listen 127.0.0.1:2222
+ssh -p 2222 dev@127.0.0.1
+```
+
+Or as a `~/.ssh/config` entry, so editors find it:
+
+```
+Host target-01-dev
+    User dev
+    ProxyCommand beacon forward %h dev --stdio
+```
+
+The username is not a credential — the tunnel already authenticated an operator
+— so it carries a choice instead. `dev@` is the machine's own shell; `wsl@` is a
+shell inside WSL where the agent can reach one.
+
+Point VS Code's **Remote - SSH** at `target-01-dev` and everything runs on the
+target, including SFTP, which is what lets the editor actually open files.
+
+> [!NOTE]
+> `dev` and `ssh` are separate services on purpose. Substituting one for the
+> other would change who authenticates without saying so.
+
+##### The full route: the target's own sshd
+
+This is the one that carries your identity onto the machine. It is the
+`ProxyCommand` entry from the previous section plus an editor, so set that up
+first and confirm plain `ssh target-01` works. Everything below assumes it does.
+
+**On the target machine**
+
+| What | How |
+| --- | --- |
+| The agent | `beacon install` then `beacon enroll`, as in [Installing on a target machine](#installing-an-agent-on-a-remote-machine) |
+| An sshd | Linux: usually already running. macOS: **Remote Login**, in Settings → General → Sharing. Windows: the **OpenSSH Server** optional feature |
+| An account, holding your key | Your public key in that account's `authorized_keys`. The relay does not authenticate this hop — the target's own sshd does |
+
+If sshd listens anywhere other than port 22, say so in the agent's config rather
+than in your ssh config. The caller names a service, never an address, so the
+port is the target's business:
+
+```json
+{ "services": { "ssh": "127.0.0.1:2222" } }
+```
+
+**On your workstation**
+
+Four things, once. First the binary, which `ProxyCommand` runs by name and so
+has to be on `PATH`:
+
+```sh
+mkdir -p ~/bin
+curl -fsSL -o ~/bin/beacon \
+  "https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+chmod +x ~/bin/beacon
+```
+
+[Setting up your workstation](#your-own-workstation) has the checksums,
+the macOS quarantine note and the rest of the detail.
+
+Then the relay it should talk to, and a session on it:
+
+```sh
+beacon config set server=https://relay.example.com
+beacon login
+```
+
+Then the ssh entry from the previous section, in `~/.ssh/config`:
+
+```
+Host target-01
+    User you
+    ProxyCommand beacon forward %h ssh --stdio
+    ForwardAgent yes
+```
+
+And finally the **Remote - SSH** extension in VS Code. Confirm plain
+`ssh target-01` works before opening the editor: if it does not, the editor will
+only tell you so more slowly.
+
+Then run **Remote-SSH: Connect to Host** from the command palette and pick
+`target-01`. VS Code opens a window whose terminal, extensions, debugger and
+source control all run on the target machine, and `git push` from that terminal
+leaves through the customer's network — authenticated by the key still sitting
+on your laptop, because of `ForwardAgent yes`.
+
+> [!WARNING]
+> On the first connection VS Code downloads its own server, roughly 100MB, onto
+> the target from `update.code.visualstudio.com`. In an environment with
+> filtered egress that download is what fails, not the tunnel, and the symptom
+> is a window that hangs on "Setting up SSH Host". Check it before blaming
+> anything here:
+>
+> ```sh
+> ssh target-01 'curl -sI https://update.code.visualstudio.com | head -1'
+> ```
+
+Two things worth knowing about how this behaves:
+
+- VS Code opens several ssh connections to one host, and each one spawns its own
+  `beacon forward --stdio`, so the dashboard shows several sessions for a single
+  editor window. Adding `ControlMaster auto` and a `ControlPath` to the `Host`
+  block collapses them into one.
+- When your relay session expires, ssh fails rather than the editor: the
+  `beacon` process writes its reason to stderr, which ssh passes through. Run
+  `beacon login` again.
+
+> [!NOTE]
+> On a Windows target you land in a Windows shell, with that machine's
+> toolchain. For the one inside WSL, connect as `wsl@` over the `dev` service.
+> That works only where the agent can reach a distribution, which an installed
+> service under LocalSystem cannot — see [Running under a user account on
+> Windows](#running-under-a-user-account-on-windows). Pointing the `ssh`
+> service at the sshd inside the distribution is the other way round to it.
+
+##### The other routes, from the same setup
+
+Nothing above replaces the rest of the toolkit; it changes when you reach for
+it. The editor covers the work you do by hand, and each of these covers
+something it cannot.
+
+**Files — `scp` and `rsync`.** The `Host` block is an ordinary ssh entry, so
+they take the alias and nothing else. No port, no second terminal:
+
+```sh
+scp ./patch.diff target-01:/tmp/
+rsync -av ./src/ target-01:/opt/app/
+```
+
+VS Code already moves a file you drag into its explorer. These are for the ones
+you did not want to open: a database dump out, a vendor archive in, a directory
+tree either way.
+
+**A desktop — `beacon forward … rdp`.** A remote desktop client cannot spawn a
+transport the way ssh does with `ProxyCommand`, so this route keeps the local
+listener:
+
+```sh
+beacon forward target-01 rdp --listen 127.0.0.1:3390
+```
+
+Worth keeping for what has no terminal at all: an installer with a dialog, a
+vendor tool that only ships a GUI, a Windows setting behind three panes.
+
+**An assistant — the MCP endpoint.** The relay exposes its own tools, so the
+assistant needs nothing local beyond being pointed at them:
+
+```sh
+claude mcp add --transport http beacon https://relay.example.com/mcp \
+  --header "Authorization: Bearer $BEACON_ADMIN_TOKEN"
+```
+
+The division of labour is worth being deliberate about, because the two look
+alike and are not:
+
+| | Reaches the target by | Use it for |
+| --- | --- | --- |
+| An assistant in the VS Code terminal | already being on the machine | the repository you have open — it sees the real filesystem, with no tool call in between |
+| The MCP endpoint | `run_command`, `read_file`, `list_dir` over the relay | machines you are **not** sitting in: a check across the fleet, a machine you have no editor window for |
+
+`list_agents` first, then the machine id in every other call. The clipboard
+tools ride the same endpoint and are the quickest way to carry a stack trace or
+a connection string off the target:
+
+> read the clipboard on target-01
+
+> [!CAUTION]
+> The MCP endpoint grants command execution on every connected machine. Read
+> [Security](#security) before pointing an assistant at it.
+
+#### Remote desktop
+
+The relay answers on one port and nothing else, so the port a desktop client
+needs is opened next to that client rather than on the relay:
+
+```sh
+beacon forward target-01 rdp --listen 127.0.0.1:3390
+```
+
+Point Remote Desktop at `127.0.0.1:3390`. Each connection to that port becomes
+its own session through the tunnel; the relay reads none of it.
+
+> [!NOTE]
+> Remote Desktop has to be switched on in the target's own Windows settings.
+> go-beacon does not enable it, and if it is off the agent logs a refused
+> connection on port 3389.
+
+#### AI assistant (MCP)
+
+Point the assistant at the relay's MCP endpoint:
+
+```sh
+claude mcp add --transport http beacon https://relay.example.com/mcp \
+  --header "Authorization: Bearer $BEACON_ADMIN_TOKEN"
+```
+
+The header is the same operator token the dashboard uses. Without it the
+endpoint answers `401` rather than exposing any tool.
+
+It gains seven tools, each naming the agent it should act on:
+
+| Tool | Purpose |
+| --- | --- |
+| `list_agents` | List the machines connected to the relay |
+| `run_command` | Run a shell command and return its output and exit code |
+| `read_file` | Read a file from a connected machine |
+| `write_file` | Write a file, replacing it if it exists |
+| `list_dir` | List the contents of a directory |
+| `read_clipboard` | Read the target's clipboard |
+| `write_clipboard` | Replace the target's clipboard |
+
+Call `list_agents` first; every other tool needs an id from it. From there it is
+ordinary conversation:
+
+> on target-01, run the test suite and show me what failed
+
+The assistant runs the command on that machine, reads the files it needs and
+reports back, without anyone opening a terminal.
+
+> [!CAUTION]
+> The MCP endpoint grants command execution on every connected machine, with no
+> authentication. See [Security](#security).
+
+#### Clipboard
+
+Two of those tools move text between machines, which is the quickest way to carry
+a stack trace or a connection string across:
+
+> read the clipboard on target-01
+
+> [!NOTE]
+> Windows and macOS always have a clipboard. A headless Linux host has none, and
+> says so rather than failing obscurely.
 
 ### Agent commands
 
@@ -506,7 +782,7 @@ withdraws a service.
 > A stream names a service, never an address. Otherwise every agent would be a
 > route into the network behind it.
 
-## Setting up your workstation
+### Your own workstation
 
 Nothing to install. You need the binary only for `beacon ssh` and
 `beacon forward` — the browser terminal and the MCP endpoint need nothing local
@@ -576,357 +852,74 @@ terms, so a target machine never needs any of this.
 Given a relay that wants credentials and a client with none, both commands say
 so rather than reporting a bare refusal.
 
-## Usage
-
-Every route below requires the agent to show as **connected** in the dashboard.
-
-### Choosing a route
-
-| You want to | Use | Needs the binary locally |
-| --- | --- | --- |
-| Look at something quickly | The browser terminal | No |
-| A shell in your own terminal | `beacon ssh` | Yes |
-| `scp`, `rsync`, ssh config | `beacon forward … ssh` | Yes |
-| Write code in their environment | VS Code over `beacon forward … ssh --stdio` | Yes |
-| A desktop | `beacon forward … rdp` | Yes |
-| Let an assistant do it | The MCP endpoint | No |
-
-### Browser terminal
-
-Press **SSH** next to an agent in the dashboard. A new tab opens with a real
-terminal on that machine — a genuine pseudo-terminal, so full-screen programs,
-colours and window resizing all behave.
-
-### A shell in your own terminal
-
-```sh
-beacon ssh target-01
-```
-
-This carries the same stream the dashboard uses and lands in a shell the same
-way, with no password in between: the relay is the authority here, not the
-target's account database.
-
-> [!NOTE]
-> That is also its limit. `beacon ssh` is not the ssh protocol, so it cannot
-> carry `scp` or `rsync`. For those, forward the target's own sshd.
-
-### A real ssh client
-
-`scp`, `rsync`, `~/.ssh/config` and agent forwarding all need the real client,
-which means the target's own sshd and its own credentials. Open the port in one
-terminal and leave it running:
-
-```sh
-beacon forward target-01 ssh --listen 127.0.0.1:2222
-```
-
-Then work against it from anywhere else, as usual:
-
-```sh
-ssh -p 2222 you@127.0.0.1
-scp -P 2222 ./patch.diff you@127.0.0.1:/tmp/
-rsync -e 'ssh -p 2222' -av ./src/ you@127.0.0.1:/opt/app/
-```
-
-The target's own sshd authenticates, with the accounts and keys that machine
-already has, so this route **does** ask for a password unless your key is already
-in its `authorized_keys`. Nothing about your ssh client changes: it talks to a
-local port, and the bytes leave over 443.
-
-> [!WARNING]
-> Note the lower-case `-p`. `ssh -P` is silently ignored and connects to port 22
-> on your own machine instead, which looks like the tunnel asking for a password
-> when it is really your laptop.
-
-For something you use daily, drop the port. `--stdio` puts one session on
-stdin and stdout instead of a listener, which is what ssh's `ProxyCommand`
-expects, so ssh starts and stops the tunnel itself:
-
-```
-Host target-01
-    User you
-    ProxyCommand beacon forward %h ssh --stdio
-    ForwardAgent yes
-```
-
-`%h` is the host you typed, so naming the block after the agent id lets one
-entry cover several machines: list them on the `Host` line, or match them with
-a pattern. Then `ssh target-01` works with no second terminal, and so does
-everything built on ssh: `scp`, `rsync`, `git`, VS Code Remote-SSH, JetBrains
-Gateway.
-
-`ForwardAgent yes` is what keeps your git credentials out of the customer's
-environment. The key stays on your laptop and only signatures cross the tunnel,
-so `git push` from the target machine authenticates as you without a token ever
-being written there — and the traffic still leaves from inside their network.
-
-> [!WARNING]
-> Agent forwarding lends your key for the length of the session: anyone with
-> root on the target can use the socket while you are connected. Leave it off
-> for a machine you do not trust that far.
-
-### Remote development
-
-This is the route that replaces working through a desktop. The files, the
-toolchain and the build stay on the target machine, with its view of the
-customer's git server and their internal services; the editor and the keyboard
-stay on your own laptop.
-
-There are two routes to it, and which one you want turns on a single question:
-does anything on the target need to act as *you*?
-
-| | `dev` — the agent's own server | `ssh` — the target's sshd |
-| --- | --- | --- |
-| Needed on the target | Nothing beyond the agent | sshd, an account, your key in it |
-| Works on a stock Windows box | Yes | Only with the OpenSSH Server feature added |
-| Who authenticates | The relay already did | The target's own sshd |
-| Agent forwarding, so `git push` uses your key | **No** | Yes |
-
-Start with `dev`. Move to `ssh` when you hit the last row — pushing to the
-customer's git server from the remote terminal with the key on your laptop is
-the usual reason, and it is not a small one.
-
-#### The short route: the agent's own server
-
-Nothing to install or configure on the target. The agent answers SSH itself.
-
-```sh
-beacon forward target-01 dev --listen 127.0.0.1:2222
-ssh -p 2222 dev@127.0.0.1
-```
-
-Or as a `~/.ssh/config` entry, so editors find it:
-
-```
-Host target-01-dev
-    User dev
-    ProxyCommand beacon forward %h dev --stdio
-```
-
-The username is not a credential — the tunnel already authenticated an operator
-— so it carries a choice instead. `dev@` is the machine's own shell; `wsl@` is a
-shell inside WSL where the agent can reach one.
-
-Point VS Code's **Remote - SSH** at `target-01-dev` and everything runs on the
-target, including SFTP, which is what lets the editor actually open files.
-
-> [!NOTE]
-> `dev` and `ssh` are separate services on purpose. Substituting one for the
-> other would change who authenticates without saying so.
-
-#### The full route: the target's own sshd
-
-This is the one that carries your identity onto the machine. It is the
-`ProxyCommand` entry from the previous section plus an editor, so set that up
-first and confirm plain `ssh target-01` works. Everything below assumes it does.
-
-**On the target machine**
-
-| What | How |
-| --- | --- |
-| The agent | `beacon install` then `beacon enroll`, as in [Installing on a target machine](#installing-on-a-target-machine) |
-| An sshd | Linux: usually already running. macOS: **Remote Login**, in Settings → General → Sharing. Windows: the **OpenSSH Server** optional feature |
-| An account, holding your key | Your public key in that account's `authorized_keys`. The relay does not authenticate this hop — the target's own sshd does |
-
-If sshd listens anywhere other than port 22, say so in the agent's config rather
-than in your ssh config. The caller names a service, never an address, so the
-port is the target's business:
-
-```json
-{ "services": { "ssh": "127.0.0.1:2222" } }
-```
-
-**On your workstation**
-
-Four things, once. First the binary, which `ProxyCommand` runs by name and so
-has to be on `PATH`:
-
-```sh
-mkdir -p ~/bin
-curl -fsSL -o ~/bin/beacon \
-  "https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-chmod +x ~/bin/beacon
-```
-
-[Setting up your workstation](#setting-up-your-workstation) has the checksums,
-the macOS quarantine note and the rest of the detail.
-
-Then the relay it should talk to, and a session on it:
-
-```sh
-beacon config set server=https://relay.example.com
-beacon login
-```
-
-Then the ssh entry from the previous section, in `~/.ssh/config`:
-
-```
-Host target-01
-    User you
-    ProxyCommand beacon forward %h ssh --stdio
-    ForwardAgent yes
-```
-
-And finally the **Remote - SSH** extension in VS Code. Confirm plain
-`ssh target-01` works before opening the editor: if it does not, the editor will
-only tell you so more slowly.
-
-Then run **Remote-SSH: Connect to Host** from the command palette and pick
-`target-01`. VS Code opens a window whose terminal, extensions, debugger and
-source control all run on the target machine, and `git push` from that terminal
-leaves through the customer's network — authenticated by the key still sitting
-on your laptop, because of `ForwardAgent yes`.
-
-> [!WARNING]
-> On the first connection VS Code downloads its own server, roughly 100MB, onto
-> the target from `update.code.visualstudio.com`. In an environment with
-> filtered egress that download is what fails, not the tunnel, and the symptom
-> is a window that hangs on "Setting up SSH Host". Check it before blaming
-> anything here:
->
-> ```sh
-> ssh target-01 'curl -sI https://update.code.visualstudio.com | head -1'
-> ```
-
-Two things worth knowing about how this behaves:
-
-- VS Code opens several ssh connections to one host, and each one spawns its own
-  `beacon forward --stdio`, so the dashboard shows several sessions for a single
-  editor window. Adding `ControlMaster auto` and a `ControlPath` to the `Host`
-  block collapses them into one.
-- When your relay session expires, ssh fails rather than the editor: the
-  `beacon` process writes its reason to stderr, which ssh passes through. Run
-  `beacon login` again.
-
-> [!NOTE]
-> On a Windows target you land in a Windows shell, with that machine's
-> toolchain. For the one inside WSL, connect as `wsl@` over the `dev` service.
-> That works only where the agent can reach a distribution, which an installed
-> service under LocalSystem cannot — see [Running under a user account on
-> Windows](#running-under-a-user-account-on-windows). Pointing the `ssh`
-> service at the sshd inside the distribution is the other way round to it.
-
-#### The other routes, from the same setup
-
-Nothing above replaces the rest of the toolkit; it changes when you reach for
-it. The editor covers the work you do by hand, and each of these covers
-something it cannot.
-
-**Files — `scp` and `rsync`.** The `Host` block is an ordinary ssh entry, so
-they take the alias and nothing else. No port, no second terminal:
-
-```sh
-scp ./patch.diff target-01:/tmp/
-rsync -av ./src/ target-01:/opt/app/
-```
-
-VS Code already moves a file you drag into its explorer. These are for the ones
-you did not want to open: a database dump out, a vendor archive in, a directory
-tree either way.
-
-**A desktop — `beacon forward … rdp`.** A remote desktop client cannot spawn a
-transport the way ssh does with `ProxyCommand`, so this route keeps the local
-listener:
-
-```sh
-beacon forward target-01 rdp --listen 127.0.0.1:3390
-```
-
-Worth keeping for what has no terminal at all: an installer with a dialog, a
-vendor tool that only ships a GUI, a Windows setting behind three panes.
-
-**An assistant — the MCP endpoint.** The relay exposes its own tools, so the
-assistant needs nothing local beyond being pointed at them:
-
-```sh
-claude mcp add --transport http beacon https://relay.example.com/mcp \
-  --header "Authorization: Bearer $BEACON_ADMIN_TOKEN"
-```
-
-The division of labour is worth being deliberate about, because the two look
-alike and are not:
-
-| | Reaches the target by | Use it for |
-| --- | --- | --- |
-| An assistant in the VS Code terminal | already being on the machine | the repository you have open — it sees the real filesystem, with no tool call in between |
-| The MCP endpoint | `run_command`, `read_file`, `list_dir` over the relay | machines you are **not** sitting in: a check across the fleet, a machine you have no editor window for |
-
-`list_agents` first, then the machine id in every other call. The clipboard
-tools ride the same endpoint and are the quickest way to carry a stack trace or
-a connection string off the target:
-
-> read the clipboard on target-01
-
-> [!CAUTION]
-> The MCP endpoint grants command execution on every connected machine. Read
-> [Security](#security) before pointing an assistant at it.
-
-### Remote desktop
-
-The relay answers on one port and nothing else, so the port a desktop client
-needs is opened next to that client rather than on the relay:
-
-```sh
-beacon forward target-01 rdp --listen 127.0.0.1:3390
-```
-
-Point Remote Desktop at `127.0.0.1:3390`. Each connection to that port becomes
-its own session through the tunnel; the relay reads none of it.
-
-> [!NOTE]
-> Remote Desktop has to be switched on in the target's own Windows settings.
-> go-beacon does not enable it, and if it is off the agent logs a refused
-> connection on port 3389.
-
-### AI assistant (MCP)
-
-Point the assistant at the relay's MCP endpoint:
-
-```sh
-claude mcp add --transport http beacon https://relay.example.com/mcp \
-  --header "Authorization: Bearer $BEACON_ADMIN_TOKEN"
-```
-
-The header is the same operator token the dashboard uses. Without it the
-endpoint answers `401` rather than exposing any tool.
-
-It gains seven tools, each naming the agent it should act on:
-
-| Tool | Purpose |
-| --- | --- |
-| `list_agents` | List the machines connected to the relay |
-| `run_command` | Run a shell command and return its output and exit code |
-| `read_file` | Read a file from a connected machine |
-| `write_file` | Write a file, replacing it if it exists |
-| `list_dir` | List the contents of a directory |
-| `read_clipboard` | Read the target's clipboard |
-| `write_clipboard` | Replace the target's clipboard |
-
-Call `list_agents` first; every other tool needs an id from it. From there it is
-ordinary conversation:
-
-> on target-01, run the test suite and show me what failed
-
-The assistant runs the command on that machine, reads the files it needs and
-reports back, without anyone opening a terminal.
-
-> [!CAUTION]
-> The MCP endpoint grants command execution on every connected machine, with no
-> authentication. See [Security](#security).
-
-### Clipboard
-
-Two of those tools move text between machines, which is the quickest way to carry
-a stack trace or a connection string across:
-
-> read the clipboard on target-01
-
-> [!NOTE]
-> Windows and macOS always have a clipboard. A headless Linux host has none, and
-> says so rather than failing obscurely.
-
-## Roadmap
+### Security
+
+Understand the current posture before deploying go-beacon anywhere.
+
+#### What is protected
+
+**Operator access.** The dashboard, the API and the MCP endpoint all grant
+command execution on every connected machine, so all three sit behind one gate.
+It is closed by default in the sense that matters: the exemption list names the
+agent tunnel and the health probe explicitly, and anything added later is
+protected until somebody deliberately opens it.
+
+A browser exchanges the token for a session cookie. There is no session store,
+because the relay has none: the cookie carries its own expiry and an HMAC over
+it, keyed by the operator token. A restart therefore signs nobody out, and
+rotating the token invalidates every outstanding session at once — which is also
+the only revocation there is until per-operator identity lands.
+
+**Credentials at rest.** The operator token is read from a mounted file rather
+than an environment variable, so it does not appear in `docker inspect`, in the
+process environment, or in anything that dumps either. The relay holds no Vault
+credential at all: Vault Agent exchanges a response-wrapped, single-use secret id
+for a short-lived token and keeps it renewed, and the relay only ever reads that
+file.
+
+**The agent's side of the tunnel.** The agent connects outbound and no port is
+opened on the target. A forwarded stream names a service, never an address, so an
+agent cannot be used as a general route into the network behind it.
+
+**Agent identity.** Each agent generates a keypair on its own machine and the
+private half never leaves it. Enrolment is authorised by an operator's username
+and password, typed once by whoever is installing, used for that one request and
+never stored on the target. What the machine keeps is a Vault-signed assertion
+binding its id to its key — an identity for itself and nothing that reaches any
+other machine.
+
+On every connection the agent signs a challenge the relay has just issued.
+Challenges are single use, so a captured handshake cannot be replayed, and the
+id comes from the assertion rather than from a header, so an enrolled machine
+cannot claim to be a different one. The relay verifies both without asking
+Vault, which is why a sealed Vault stops enrolment without disconnecting anyone.
+
+**The blast radius of a Vault outage.** The relay caches Vault's public keys, so
+a sealed or unreachable Vault stops enrolment and renewal but does not disconnect
+a fleet that is already running. That matters because the fleet is exactly the
+set of machines nobody can reach to fix.
+
+#### What is not protected yet
+
+**One shared operator token.** There is no per-operator identity, no attribution
+of who did what, and no way to revoke one person without rotating for everyone.
+
+**No audit trail for operator actions.** Vault records credential issuance; the
+relay does not yet record who ran what.
+
+**Nothing here has been through a security audit.**
+
+#### Deployment guidance
+
+- Set an operator token. Without one the relay starts, says so loudly in its
+  log, and serves all three surfaces to anyone who reaches it.
+- Keep the relay on a private interface, or behind an authenticating proxy, for
+  as long as agents remain unauthenticated.
+- Vault must never be reachable by agents. It is not published in the shipped
+  compose files, and it should stay that way: agents run on customer networks,
+  and exposing a Vault to them is a worse exposure than the relay itself.
+
+### Roadmap
 
 | Step | What it adds |
 | --- | --- |
@@ -941,6 +934,43 @@ present client certificates — still worked, and taking on a certificate
 lifecycle whose expiry is fleet-fatal on machines reachable only through the
 tunnel they serve. Signed assertions at the application layer give the same
 properties, including non-replayability, without any of that.
+
+### How this was built
+
+go-beacon is vibe-coded. It was designed and written with an AI assistant in the
+loop for most of it, and that is stated here for the same reason the security
+posture is: you should know what you are adopting.
+
+**Why that is worth something.** The capability surface in the table above —
+a cross-platform agent, native service integration on three operating systems, a
+self-updating fleet, a browser terminal, a port forwarder and an MCP bridge —
+is far more ground than a project this size would normally cover. Working this
+way is what made that scope reachable, and it is what keeps the turnaround on a
+reported bug measured in days rather than quarters. A fix costs about what a
+feature costs here.
+
+**What keeps it honest.** Generated code is not shipped on trust:
+
+- The mechanisms most likely to bite are the ones under test: the operator gate
+  and its session handling, credential loading, signature verification and key
+  rotation, update and rollback, process supervision, port forwarding, the ssh
+  command path, clipboard handling and config parsing. `make test` runs them;
+  `make vet` gates `go vet` and `gofmt` over the whole tree.
+- Hard failures get investigated to a root cause and written up rather than
+  patched until the symptom disappears — an upgrade handshake race, the Windows
+  auto-update path, the supervision loop. Those write-ups are kept internally.
+- Every release is built reproducibly from a tagged commit, refuses to build
+  from a dirty tree, and publishes `SHA256SUMS`.
+
+**What to expect.** Bugs. Particularly away from the paths that get daily use:
+unusual platforms, uncommon service configurations, the edges of the forwarding
+and update logic. This is young software and it has not been through a security
+audit or a formal review.
+
+> [!TIP]
+> Rough edges are the most useful thing you can send back. Open an issue with
+> the platform, the command and what the dashboard's event feed showed —
+> that is usually enough to reproduce it.
 
 ## Licensing
 

@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
+	"strings"
 	"sync"
 
 	gssh "github.com/gliderlabs/ssh"
+	"github.com/bolchisb/go-beacon/internal/supervise"
 	"github.com/pkg/sftp"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -30,56 +32,89 @@ import (
 // through the relay's authenticated tunnel, and are handed to HandleConn. A
 // listener on loopback would have handed a shell to every local user on the
 // machine, which is the one thing this must not do.
-
 var (
-	sshOnce   sync.Once
+	sshMu     sync.Mutex
 	sshServer *gssh.Server
-	sshErr    error
 )
 
-// resetSSHServer exists for tests, which need a fresh server per case. The
-// sync.Once is right in production, where one server serves every stream.
+// resetSSHServer exists for tests, which need a fresh server per case.
 func resetSSHServer() {
-	sshOnce = sync.Once{}
-	sshServer, sshErr = nil, nil
+	sshMu.Lock()
+	defer sshMu.Unlock()
+	sshServer = nil
 }
 
 // embeddedSSH builds the server once and reuses it. Each stream is a separate
 // connection to the same server.
+//
+// A failure is deliberately not remembered. Caching it would have been cheaper
+// and would have meant that one transient fault -- a disk briefly full while
+// the host key is written -- left this service dead until somebody restarted
+// an agent on a machine reachable only through the tunnel that agent serves.
+// The next connection builds it again.
 func embeddedSSH(cfg *Config) (*gssh.Server, error) {
-	sshOnce.Do(func() {
-		signer, err := hostKey(cfg)
-		if err != nil {
-			sshErr = err
-			return
-		}
-		srv := &gssh.Server{
-			Handler: sessionHandler,
-			// Declared explicitly because this server is driven by HandleConn
-			// rather than Serve, and the defaults are installed by the latter.
-			// Without them the handshake succeeds and every session channel is
-			// rejected as an unknown type -- a connection that looks fine and
-			// can do nothing.
-			ChannelHandlers: map[string]gssh.ChannelHandler{
-				"session": gssh.DefaultSessionHandler,
-			},
-			SubsystemHandlers: map[string]gssh.SubsystemHandler{
-				"sftp": sftpHandler,
-			},
-			// Every credential is accepted, and that is deliberate rather than
-			// an omission. The gate is the tunnel: a stream only reaches here
-			// after the relay authenticated an operator and the agent proved
-			// its own identity. Asking again for a credential this machine
-			// would have to store, and that no operator has, would add a
-			// secret without adding a check.
-			PublicKeyHandler:           func(gssh.Context, gssh.PublicKey) bool { return true },
-			PasswordHandler:            func(gssh.Context, string) bool { return true },
-			KeyboardInteractiveHandler: func(gssh.Context, xssh.KeyboardInteractiveChallenge) bool { return true },
-		}
-		srv.AddHostKey(signer)
-		sshServer = srv
-	})
-	return sshServer, sshErr
+	sshMu.Lock()
+	defer sshMu.Unlock()
+	if sshServer != nil {
+		return sshServer, nil
+	}
+
+	signer, err := hostKey(cfg)
+	if err != nil {
+		return nil, err
+	}
+	srv := &gssh.Server{
+		Handler: sessionHandler,
+		// Declared explicitly because this server is driven by HandleConn
+		// rather than Serve, and the defaults are installed by the latter.
+		// Without them the handshake succeeds and every session channel is
+		// rejected as an unknown type -- a connection that looks fine and
+		// can do nothing.
+		ChannelHandlers: map[string]gssh.ChannelHandler{
+			"session": gssh.DefaultSessionHandler,
+			// What an editor uses to reach a dev server running on the
+			// target: the Ports panel, and every "open in browser" that
+			// follows from it. Without it the editor connects and the panel
+			// silently forwards nothing.
+			"direct-tcpip": gssh.DirectTCPIPHandler,
+		},
+		// Loopback only. A forward that could name any address would make
+		// this agent the route into the customer's network that every other
+		// part of the design refuses to be -- the same reason a forward
+		// stream names a service rather than a host and port. The target's
+		// own localhost is where a dev server lives, and it is enough.
+		LocalPortForwardingCallback: func(_ gssh.Context, host string, port uint32) bool {
+			if isLoopbackHost(host) {
+				return true
+			}
+			slog.Warn("ssh: refused a forward off loopback", "host", host, "port", port)
+			return false
+		},
+		SubsystemHandlers: map[string]gssh.SubsystemHandler{
+			"sftp": sftpHandler,
+		},
+		// Every credential is accepted, and that is deliberate rather than
+		// an omission. The gate is the tunnel: a stream only reaches here
+		// after the relay authenticated an operator and the agent proved
+		// its own identity. Asking again for a credential this machine
+		// would have to store, and that no operator has, would add a
+		// secret without adding a check.
+		PublicKeyHandler:           func(gssh.Context, gssh.PublicKey) bool { return true },
+		PasswordHandler:            func(gssh.Context, string) bool { return true },
+		KeyboardInteractiveHandler: func(gssh.Context, xssh.KeyboardInteractiveChallenge) bool { return true },
+	}
+	srv.AddHostKey(signer)
+	sshServer = srv
+	return srv, nil
+}
+
+// isLoopbackHost reports whether a forward destination stays on the target.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // handleSSH serves one relay stream as an SSH connection.
@@ -94,10 +129,12 @@ func handleSSH(stream net.Conn, cfg *Config) {
 	srv.HandleConn(stream)
 }
 
-// sessionHandler runs one ssh session: a terminal when the client asked for
-// one, otherwise the command it sent.
+// sessionHandler runs one ssh session. It is the outermost frame of a
+// goroutine this process did not start: gliderlabs runs each session and each
+// subsystem in one of its own, with no recover in between, so a panic here
+// would take the agent down and with it the only way back onto the machine.
 func sessionHandler(s gssh.Session) {
-	ptyReq, winCh, isPty := s.Pty()
+	defer supervise.Recover("ssh-session")
 
 	// The ssh username selects the environment. Authentication accepts any
 	// credential -- the tunnel is the gate -- so the name is free to carry a
@@ -108,11 +145,15 @@ func sessionHandler(s gssh.Session) {
 		return
 	}
 
-	name, args := shellFor(s.Command())
-	env := s.Environ()
-	if isPty && ptyReq.Term != "" {
-		env = append(env, "TERM="+ptyReq.Term)
-	}
+	name, args := shellFor(s.RawCommand())
+	serveSession(s, name, args)
+}
+
+// serveSession runs one program for a session, with a terminal or without, and
+// reports what it exited with. Both the machine's own shell and a shell inside
+// WSL come through here; they differ only in what they run.
+func serveSession(s gssh.Session, name string, args []string) {
+	ptyReq, winCh, isPty := s.Pty()
 
 	if !isPty {
 		// No terminal: scp, git and rsync all land here. Running without a pty
@@ -120,6 +161,11 @@ func sessionHandler(s gssh.Session) {
 		// editing.
 		runWithoutPTY(s, name, args)
 		return
+	}
+
+	env := s.Environ()
+	if ptyReq.Term != "" {
+		env = append(env, "TERM="+ptyReq.Term)
 	}
 
 	term, err := startPTYWith(name, args, env)
@@ -133,22 +179,31 @@ func sessionHandler(s gssh.Session) {
 	if ptyReq.Window.Width > 0 {
 		_ = term.Resize(uint16(ptyReq.Window.Width), uint16(ptyReq.Window.Height))
 	}
-	go func() {
+	supervise.Go("ssh-window", func() {
 		for w := range winCh {
 			_ = term.Resize(uint16(w.Width), uint16(w.Height))
 		}
-	}()
+	})
+	supervise.Go("ssh-stdin", func() { _, _ = io.Copy(term, s) })
 
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(term, s); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(s, term); done <- struct{}{} }()
-	<-done
-	_ = s.Exit(0)
+	// Output is copied on this goroutine rather than raced against the input
+	// half. Returning on whichever finished first cut the session off while
+	// the program was still writing, which a client that closes its own stdin
+	// -- `ssh host cmd < /dev/null`, and every editor that does the same --
+	// hit every time. This returns when the terminal closes, which is after
+	// the program exited and everything it wrote has been read.
+	_, _ = io.Copy(s, term)
+
+	// Closing before waiting matters when it was the client that vanished: the
+	// program is still running and nothing else would ever reap it.
+	_ = term.Close()
+	_ = s.Exit(term.Wait())
 }
-
 // sftpHandler serves the subsystem VS Code Remote-SSH and scp rely on. Without
 // it an editor connects, reports success, and then cannot open a single file.
 func sftpHandler(s gssh.Session) {
+	defer supervise.Recover("ssh-sftp")
+
 	server, err := sftp.NewServer(s)
 	if err != nil {
 		slog.Warn("sftp: cannot start", "err", err)
@@ -164,22 +219,16 @@ func sftpHandler(s gssh.Session) {
 // an interactive shell. The per-platform halves live in sshshell_*.go, because
 // deciding at runtime would still need the Windows shell lookup to compile on
 // unix.
-func shellFor(command []string) (string, []string) {
-	if len(command) > 0 {
-		return commandShell(joinCommand(command))
+//
+// The command must be the raw one. Session.Command() hands back an argv the
+// library already split with shlex, and re-joining that on spaces loses every
+// quote the client wrote: rsync and scp send paths as one quoted argument, so
+// a directory with a space in its name arrived at the shell as two.
+func shellFor(command string) (string, []string) {
+	if strings.TrimSpace(command) != "" {
+		return commandShell(command)
 	}
 	return interactiveShell()
-}
-
-func joinCommand(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += " "
-		}
-		out += p
-	}
-	return out
 }
 
 // hostKey returns this machine's ssh host key, generating one the first time.
@@ -192,11 +241,7 @@ func hostKey(cfg *Config) (xssh.Signer, error) {
 			return nil, err
 		}
 		cfg.SSHHostKey = base64.StdEncoding.EncodeToString(priv)
-		if _, err := saveConfig(*cfg); err != nil {
-			// Not fatal: the session works, the client just sees a new host key
-			// next time. Saying so beats failing the connection.
-			slog.Warn("ssh: could not persist the host key", "err", err)
-		}
+		persistHostKey(cfg.SSHHostKey)
 	}
 	raw, err := base64.StdEncoding.DecodeString(cfg.SSHHostKey)
 	if err != nil || len(raw) != ed25519.PrivateKeySize {
@@ -226,6 +271,9 @@ func execCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 // exitCodeOf reports what the command exited with, so the ssh client sees the
 // real status rather than a blanket failure.
 func exitCodeOf(err error) int {
+	if err == nil {
+		return 0
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return ee.ExitCode()
@@ -264,32 +312,11 @@ func serveWSL(s gssh.Session) {
 	}
 
 	name, args := wslShell("")
-	ptyReq, winCh, isPty := s.Pty()
-	if !isPty {
-		runWithoutPTY(s, name, args)
-		return
+	// A command has to be carried into the distribution. Without this the
+	// default shell opened instead and the command was dropped, which scp and
+	// rsync read as a session that never answers.
+	if cmd := strings.TrimSpace(s.RawCommand()); cmd != "" {
+		args = append(args, "--", "sh", "-c", cmd)
 	}
-
-	term, err := startPTYWith(name, args, s.Environ())
-	if err != nil {
-		fmt.Fprintf(s, "cannot start WSL: %v\r\n", err)
-		_ = s.Exit(1)
-		return
-	}
-	defer term.Close()
-
-	if ptyReq.Window.Width > 0 {
-		_ = term.Resize(uint16(ptyReq.Window.Width), uint16(ptyReq.Window.Height))
-	}
-	go func() {
-		for w := range winCh {
-			_ = term.Resize(uint16(w.Width), uint16(w.Height))
-		}
-	}()
-
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(term, s); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(s, term); done <- struct{}{} }()
-	<-done
-	_ = s.Exit(0)
+	serveSession(s, name, args)
 }
