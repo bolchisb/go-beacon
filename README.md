@@ -597,9 +597,53 @@ toolchain and the build stay on the target machine, with its view of the
 customer's git server and their internal services; the editor and the keyboard
 stay on your own laptop.
 
-It is the `ProxyCommand` entry from the previous section plus an editor, so set
-that up first and confirm plain `ssh target-01` works. Everything below assumes
-it does.
+There are two routes to it, and which one you want turns on a single question:
+does anything on the target need to act as *you*?
+
+| | `dev` — the agent's own server | `ssh` — the target's sshd |
+| --- | --- | --- |
+| Needed on the target | Nothing beyond the agent | sshd, an account, your key in it |
+| Works on a stock Windows box | Yes | Only with the OpenSSH Server feature added |
+| Who authenticates | The relay already did | The target's own sshd |
+| Agent forwarding, so `git push` uses your key | **No** | Yes |
+
+Start with `dev`. Move to `ssh` when you hit the last row — pushing to the
+customer's git server from the remote terminal with the key on your laptop is
+the usual reason, and it is not a small one.
+
+#### The short route: the agent's own server
+
+Nothing to install or configure on the target. The agent answers SSH itself.
+
+```sh
+beacon forward target-01 dev --listen 127.0.0.1:2222
+ssh -p 2222 dev@127.0.0.1
+```
+
+Or as a `~/.ssh/config` entry, so editors find it:
+
+```
+Host target-01-dev
+    User dev
+    ProxyCommand beacon forward %h dev --stdio
+```
+
+The username is not a credential — the tunnel already authenticated an operator
+— so it carries a choice instead. `dev@` is the machine's own shell; `wsl@` is a
+shell inside WSL where the agent can reach one.
+
+Point VS Code's **Remote - SSH** at `target-01-dev` and everything runs on the
+target, including SFTP, which is what lets the editor actually open files.
+
+> [!NOTE]
+> `dev` and `ssh` are separate services on purpose. Substituting one for the
+> other would change who authenticates without saying so.
+
+#### The full route: the target's own sshd
+
+This is the one that carries your identity onto the machine. It is the
+`ProxyCommand` entry from the previous section plus an editor, so set that up
+first and confirm plain `ssh target-01` works. Everything below assumes it does.
 
 **On the target machine**
 
