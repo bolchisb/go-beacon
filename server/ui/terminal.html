@@ -101,6 +101,58 @@ term.onData((data) => {
 
 term.onResize(sendResize);
 window.addEventListener('resize', () => fit.fit());
+
+// Pasting an image.
+//
+// A terminal carries keystrokes, and an image has none, so this cannot go down
+// the same pipe as the rest of a paste. It goes around: the bytes are posted to
+// the relay, which puts them on the clipboard of the machine this terminal is
+// attached to. Whatever is running in the shell then finds the image where it
+// looks for one -- in its own machine's clipboard -- instead of reporting an
+// empty one while the image sits on the laptop.
+//
+// The event's own clipboardData is what is read, rather than
+// navigator.clipboard. That reads without asking permission and, more to the
+// point, works when the dashboard is reached over plain http, where
+// navigator.clipboard does not exist at all.
+document.addEventListener('paste', async (e) => {
+  const file = imageFrom(e.clipboardData);
+  if (!file) return;   // an ordinary text paste: leave it to the terminal
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  const previous = stateEl.textContent;
+  setState('pasting image…', true);
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agent)}/clipboard/image`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'image/png' },
+      body: file,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `the relay answered ${res.status}`);
+    }
+    const { written } = await res.json();
+    setState(previous, true);
+    term.write(`\r\n\x1b[32m[image on the clipboard of ${agent}, ${written} bytes — paste it again in the program you are running]\x1b[0m\r\n`);
+  } catch (err) {
+    setState(previous, true);
+    term.write(`\r\n\x1b[31m[could not paste the image: ${err.message}]\x1b[0m\r\n`);
+  }
+}, true);
+
+// imageFrom picks the image out of a paste, and only a PNG: it is what a
+// screenshot is on all three platforms, and what every clipboard on the other
+// end can be handed without a conversion nobody asked for.
+function imageFrom(data) {
+  if (!data || !data.items) return null;
+  for (const item of data.items) {
+    if (item.kind === 'file' && item.type === 'image/png') return item.getAsFile();
+  }
+  return null;
+}
 </script>
 </body>
 </html>

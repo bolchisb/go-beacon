@@ -11,6 +11,28 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
+// Transport is what the relay can honestly say about how a connection reached
+// it, and the difference between the first two answers is the whole reason it
+// is worth showing at all.
+type Transport string
+
+const (
+	// TransportTLS: this relay terminated TLS itself, so the handshake is
+	// something it observed rather than something it was told.
+	TransportTLS Transport = "tls"
+
+	// TransportProxyTLS: the connection arrived in plain text carrying
+	// X-Forwarded-Proto: https. That is a claim in a header, and a header is
+	// written by whoever sent the request -- which on this path is the agent.
+	// A relay behind a proxy that overwrites the header is genuinely encrypted;
+	// one reachable directly is being told a story. The relay cannot tell those
+	// apart, so it reports the claim and does not dress it up as a fact.
+	TransportProxyTLS Transport = "proxy-tls"
+
+	// TransportPlain: no TLS, and nothing claiming any.
+	TransportPlain Transport = "plain"
+)
+
 // agentRec is the server-side record of one agent. Records survive
 // disconnection so the UI can show who dropped and how often they flap.
 type agentRec struct {
@@ -18,6 +40,12 @@ type agentRec struct {
 	remoteAddr string
 	session    *yamux.Session
 	conn       *protocol.CountingConn
+
+	transport Transport
+	// transportDetail is what to tell an operator hovering the padlock: the
+	// negotiated version when this relay saw the handshake, or which proxy
+	// vouched for it when it did not.
+	transportDetail string
 
 	online     bool
 	since      time.Time // when the current online/offline state began
@@ -38,9 +66,13 @@ type AgentView struct {
 	SinceSeconds float64   `json:"since_seconds"`
 	Reconnects   int       `json:"reconnects"`
 	Streams      int       `json:"streams"`
-	BytesIn      uint64    `json:"bytes_in"`
-	BytesOut     uint64    `json:"bytes_out"`
-	RTTms        *float64  `json:"rtt_ms"`
+	// Transport is "tls", "proxy-tls" or "plain"; TransportDetail explains it
+	// in words, for the tooltip on the padlock.
+	Transport       string   `json:"transport"`
+	TransportDetail string   `json:"transport_detail,omitempty"`
+	BytesIn         uint64   `json:"bytes_in"`
+	BytesOut        uint64   `json:"bytes_out"`
+	RTTms           *float64 `json:"rtt_ms"`
 }
 
 type Registry struct {
@@ -55,7 +87,7 @@ func newRegistry() *Registry {
 // Connect registers a freshly established session. If the agent id is already
 // online the previous session is closed: last connection wins, which is what
 // you want when a client reconnects before the old socket has timed out.
-func (r *Registry) Connect(h protocol.Hello, remoteAddr string, sess *yamux.Session, conn *protocol.CountingConn) (rec *agentRec, reconnect bool) {
+func (r *Registry) Connect(h protocol.Hello, remoteAddr string, sess *yamux.Session, conn *protocol.CountingConn, transport Transport, transportDetail string) (rec *agentRec, reconnect bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -72,6 +104,8 @@ func (r *Registry) Connect(h protocol.Hello, remoteAddr string, sess *yamux.Sess
 
 	rec.hello = h
 	rec.remoteAddr = remoteAddr
+	rec.transport = transport
+	rec.transportDetail = transportDetail
 	rec.session = sess
 	rec.conn = conn
 	rec.online = true
@@ -133,6 +167,12 @@ func (r *Registry) Snapshot() []AgentView {
 			Reconnects:   rec.reconnects,
 		}
 		if rec.online {
+			// Only for a live session. On a record that has dropped, the
+			// transport describes a connection that no longer exists, and a
+			// padlock next to "disconnected" would be claiming something about
+			// nothing.
+			v.Transport = string(rec.transport)
+			v.TransportDetail = rec.transportDetail
 			v.Streams = rec.session.NumStreams()
 			v.BytesIn = rec.conn.In()
 			v.BytesOut = rec.conn.Out()

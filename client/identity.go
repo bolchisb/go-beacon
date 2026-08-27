@@ -49,14 +49,15 @@ func publicKeyOf(priv ed25519.PrivateKey) string {
 
 // enroll asks the relay for an assertion. The operator credentials are used for
 // this one call and never stored.
-func enroll(server, caFile, username, password, agentID, publicKey string) (string, error) {
+func enroll(server, caFile, username, password, agentID, publicKey string, rebind bool) (string, error) {
 	u, err := relayURL(server, protocol.EnrollPath)
 	if err != nil {
 		return "", err
 	}
-	body, err := json.Marshal(map[string]string{
+	body, err := json.Marshal(map[string]any{
 		"username": username, "password": password,
 		"agent_id": agentID, "public_key": publicKey,
+		"rebind": rebind,
 	})
 	if err != nil {
 		return "", err

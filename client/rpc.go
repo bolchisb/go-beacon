@@ -60,6 +60,10 @@ func dispatchRPC(req protocol.RPCRequest) protocol.RPCResponse {
 		return opClipboardRead()
 	case protocol.OpClipboardWrite:
 		return opClipboardWrite(req)
+	case protocol.OpClipboardWriteImage:
+		return opClipboardWriteImage(req)
+	case protocol.OpClipboardReadImage:
+		return opClipboardReadImage()
 	default:
 		return protocol.RPCResponse{Error: fmt.Sprintf("unknown operation %q", req.Op)}
 	}

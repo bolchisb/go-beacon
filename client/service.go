@@ -357,7 +357,13 @@ func copyExecutable(target string) error {
 // The credentials are typed here, used for one request, and dropped. What stays
 // on the machine is its own private key and the assertion -- an identity for
 // this agent and nothing that reaches any other.
-func enrollThisMachine(cfg *resolved) error {
+func enrollThisMachine(cfg *resolved) error { return enrollThisMachineAs(cfg, false) }
+
+// enrollThisMachineAs carries the rebind decision. It is separate so that
+// nothing but `beacon enroll --rebind` can set it: taking over a name another
+// key holds is an operator's call, not something install should do quietly on
+// its way past.
+func enrollThisMachineAs(cfg *resolved, rebind bool) error {
 	priv, err := ensureKeypair(&cfg.Config)
 	if err != nil {
 		return err
@@ -381,7 +387,7 @@ func enrollThisMachine(cfg *resolved) error {
 
 	step("enrolling with the relay")
 	assertion, err := enroll(cfg.Server, cfg.CAFile, username, password,
-		cfg.AgentID, publicKeyOf(priv))
+		cfg.AgentID, publicKeyOf(priv), rebind)
 	if err != nil {
 		return fmt.Errorf("enrolment failed: %w", err)
 	}

@@ -15,7 +15,7 @@ const testToken = "s3cr3t-operator-token"
 
 // stub stands in for the mux so these tests exercise the gate and nothing else.
 func gated(token string) http.Handler {
-	return newAuth(token, newOperatorStore(nil, "")).protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return newAuth(token, newOperatorStore(nil, ""), parseProxies("")).protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("reached"))
 	}))
@@ -98,7 +98,7 @@ func TestBrowserGetsALoginPageAndAnAPIClientGetsJSON(t *testing.T) {
 }
 
 func TestLoginIssuesASessionCookieThatWorks(t *testing.T) {
-	a := newAuth(testToken, newOperatorStore(nil, ""))
+	a := newAuth(testToken, newOperatorStore(nil, ""), parseProxies(""))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/login",
 		strings.NewReader("token="+testToken))
@@ -125,7 +125,7 @@ func TestLoginIssuesASessionCookieThatWorks(t *testing.T) {
 }
 
 func TestLoginRefusesTheWrongToken(t *testing.T) {
-	a := newAuth(testToken, newOperatorStore(nil, ""))
+	a := newAuth(testToken, newOperatorStore(nil, ""), parseProxies(""))
 	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader("token=wrong"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -140,7 +140,7 @@ func TestLoginRefusesTheWrongToken(t *testing.T) {
 }
 
 func TestATamperedOrExpiredSessionIsRejected(t *testing.T) {
-	a := newAuth(testToken, newOperatorStore(nil, ""))
+	a := newAuth(testToken, newOperatorStore(nil, ""), parseProxies(""))
 
 	if a.validSession("not-a-session") {
 		t.Error("garbage accepted")
@@ -162,8 +162,8 @@ func TestATamperedOrExpiredSessionIsRejected(t *testing.T) {
 func TestRotatingTheTokenInvalidatesOutstandingSessions(t *testing.T) {
 	// The signing key is the token itself, so this comes for free -- and it is
 	// the only revocation mechanism a stateless server has.
-	old := newAuth(testToken, newOperatorStore(nil, "")).session(time.Now().Add(time.Hour))
-	if newAuth("a-different-token", newOperatorStore(nil, "")).validSession(old) {
+	old := newAuth(testToken, newOperatorStore(nil, ""), parseProxies("")).session(time.Now().Add(time.Hour))
+	if newAuth("a-different-token", newOperatorStore(nil, ""), parseProxies("")).validSession(old) {
 		t.Error("a session survived a token rotation")
 	}
 }
@@ -183,3 +183,31 @@ func TestServerRoutesAreGated(t *testing.T) {
 }
 
 func timeNowPlusHour() time.Time { return time.Now().Add(time.Hour) }
+
+// TestAnUnsetAdminTokenNeverMatches is the regression for the shape that looked
+// safe and was not: an operator account exists, so the gate reports itself as
+// enabled and nothing warns, but the admin token was dropped from the
+// deployment after bootstrap. subtle.ConstantTimeCompare calls two empty inputs
+// a match, so an empty candidate authenticated as the admin.
+func TestAnUnsetAdminTokenNeverMatches(t *testing.T) {
+	ops := newOperatorStore(nil, "")
+	ops.rec = &operator{Username: "operator", SessionKey: "a-session-key"}
+
+	a := newAuth("", ops, parseProxies(""))
+	if !a.enabled() {
+		t.Fatal("an operator account should keep the gate enabled")
+	}
+	if a.matches("") {
+		t.Fatal("an empty candidate must not match an unset admin token")
+	}
+	if a.matches("anything") {
+		t.Fatal("nothing should match an unset admin token")
+	}
+
+	// The reachable form of it: a bearer header with no value.
+	r := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	r.Header.Set("Authorization", "Bearer ")
+	if a.authenticated(r) {
+		t.Fatal("an empty bearer token authenticated against an unset admin token")
+	}
+}

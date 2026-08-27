@@ -38,6 +38,54 @@ function renderAgents(agents) {
   tbody.replaceChildren(...agents.map(buildRow));
 }
 
+// transportBadge says how the agent's connection reached the relay.
+//
+// Three states, not two, and the middle one is the reason this is worth
+// drawing. A closed padlock is only shown when the relay terminated TLS itself
+// and watched the handshake happen. Behind a proxy the relay sees plain HTTP
+// and the only evidence is X-Forwarded-Proto, a header the sender writes -- so
+// that gets its own mark and says, on hover, that it is a claim. Painting the
+// same padlock for both would be the dashboard vouching for something nobody
+// checked.
+function transportBadge(a) {
+  const span = document.createElement('span');
+  span.className = 'lock';
+
+  if (a.transport === 'tls') {
+    span.classList.add('ok');
+    span.innerHTML = LOCK_CLOSED;
+    span.title = a.transport_detail ? `Encrypted — ${a.transport_detail}.` : 'Encrypted.';
+    span.setAttribute('aria-label', 'encrypted');
+    return span;
+  }
+
+  if (a.transport === 'proxy-tls') {
+    span.classList.add('claimed');
+    span.innerHTML = LOCK_CLOSED;
+    span.title = 'Reported as https by X-Forwarded-Proto, from a peer this relay '
+      + 'has not been told to trust. Name your proxy in BEACON_TRUSTED_PROXIES '
+      + 'and this becomes a padlock; until then it is only what the caller said '
+      + 'about itself.';
+    span.setAttribute('aria-label', 'encryption reported by a proxy, not verified');
+    return span;
+  }
+
+  span.classList.add('none');
+  span.innerHTML = LOCK_OPEN;
+  span.title = 'Not encrypted. The connection this relay accepted was plain HTTP.';
+  span.setAttribute('aria-label', 'not encrypted');
+  return span;
+}
+
+// Inline so they inherit currentColor and need no request of their own.
+const LOCK_CLOSED = '<svg viewBox="0 0 12 14" width="10" height="12" aria-hidden="true">'
+  + '<path d="M3 6V4a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.4"/>'
+  + '<rect x="1.5" y="6" width="9" height="7" rx="1.2" fill="currentColor"/></svg>';
+
+const LOCK_OPEN = '<svg viewBox="0 0 12 14" width="10" height="12" aria-hidden="true">'
+  + '<path d="M3 6V4a3 3 0 0 1 5.6-1.5" fill="none" stroke="currentColor" stroke-width="1.4"/>'
+  + '<rect x="1.5" y="6" width="9" height="7" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+
 function buildRow(a) {
   const tr = document.createElement('tr');
   if (!a.online) tr.className = 'offline';
@@ -53,6 +101,7 @@ function buildRow(a) {
   const dot = document.createElement('span');
   dot.className = `dot ${a.online ? 'up' : 'down'}`;
   state.append(dot, a.online ? 'connected' : 'disconnected');
+  if (a.online) state.append(transportBadge(a));
 
   tr.append(
     state,

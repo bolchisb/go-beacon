@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -178,4 +179,50 @@ func splitAssertion(v string) (doc, sig string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// TestAChallengeFloodDoesNotEvictPendingOnes is the regression for an
+// unauthenticated denial of service. The endpoint hands out nonces to anyone,
+// and evicting the oldest when full meant a flood pushed out the ones real
+// agents were holding: their handshake failed and a fleet reachable only
+// through this relay could not reconnect. The flood is refused instead.
+func TestAChallengeFloodDoesNotEvictPendingOnes(t *testing.T) {
+	c := newChallenges()
+
+	// One honest agent, holding a nonce it has not redeemed yet.
+	pending, err := c.issue()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i < maxChallenges; i++ {
+		if _, err := c.issue(); err != nil {
+			t.Fatalf("issue %d failed early: %v", i, err)
+		}
+	}
+
+	if _, err := c.issue(); !errors.Is(err, errTooManyChallenges) {
+		t.Fatalf("a full pool should refuse, got %v", err)
+	}
+	if !c.redeem(pending) {
+		t.Fatal("the flood evicted a nonce an agent was still holding")
+	}
+}
+
+func TestChallengeFloodIsReportedAsBackPressure(t *testing.T) {
+	s := &Server{challenges: newChallenges()}
+	for i := 0; i < maxChallenges; i++ {
+		if _, err := s.challenges.issue(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	s.handleAgentChallenge(w, httptest.NewRequest(http.MethodGet, protocol.ChallengePath, nil))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusTooManyRequests)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatal("a refusal that means try again should say so")
+	}
 }

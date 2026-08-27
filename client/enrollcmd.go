@@ -16,6 +16,8 @@ func cmdEnroll(args []string) error {
 	fs.String(keyID, "", "agent identity shown in the dashboard")
 	fs.String(keyCA, "", "PEM bundle trusted in addition to the system roots")
 	fs.String(keyUser, "", "operator username to enrol with")
+	rebind := fs.Bool("rebind", false,
+		"take over an agent id that is enrolled with a different key, after this machine was rebuilt")
 	fs.Usage = func() {
 		usageFor(fs, "beacon enroll", "Give this machine an identity with the relay.")
 	}
@@ -30,7 +32,7 @@ func cmdEnroll(args []string) error {
 	if err := requireElevation(); err != nil {
 		return err
 	}
-	if err := enrollThisMachine(cfg); err != nil {
+	if err := enrollThisMachineAs(cfg, *rebind); err != nil {
 		return err
 	}
 	if _, err := saveConfig(cfg.Config); err != nil {
