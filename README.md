@@ -345,10 +345,35 @@ The same binary serves two roles, and confusing them is the most common mistake.
 
 ## Installing on a target machine
 
-Copy the binary for the target's platform out of `dist/`, then:
+Work out which build this machine needs. `uname -m` reports several spellings
+of the same two architectures, so match rather than assume:
 
 ```sh
-beacon install --server https://relay.example.com --id target-01
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$(uname -m)" in
+  x86_64|amd64)  arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "no build for $(uname -m)"; exit 1 ;;
+esac
+```
+
+Then fetch it, check it, and put it somewhere root can run it:
+
+```sh
+curl -fsSLO "https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-$os-$arch"
+curl -fsSLO "https://github.com/bolchisb/go-beacon/releases/latest/download/SHA256SUMS"
+grep " beacon-$os-$arch$" SHA256SUMS | shasum -a 256 -c -
+sudo install -m 0755 "beacon-$os-$arch" /usr/local/bin/beacon
+```
+
+> [!IMPORTANT]
+> `/usr/local/bin`, not `~/bin`. Installing an agent needs root, and `sudo`
+> replaces `PATH` with a safe one that does not include your home directory —
+> so a binary in `~/bin` gives `sudo: beacon: command not found`, having worked
+> perfectly a moment earlier without `sudo`.
+
+```sh
+sudo beacon install --server https://relay.example.com --id target-01
 ```
 
 It asks for an operator username and password, enrols the machine, then
@@ -488,14 +513,34 @@ Nothing to install. You need the binary only for `beacon ssh` and
 at all.
 
 ```sh
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$(uname -m)" in
+  x86_64|amd64)  arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "no build for $(uname -m)"; exit 1 ;;
+esac
+```
+
+```sh
 mkdir -p ~/bin
-wget -qO ~/bin/beacon https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-darwin-arm64
+curl -fsSL -o ~/bin/beacon \
+  "https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-$os-$arch"
 chmod +x ~/bin/beacon
 ```
 
-Substitute the file name for your platform: `beacon-linux-amd64`,
-`beacon-windows-amd64.exe`, and so on. Each release also publishes a
-`SHA256SUMS` file for verification.
+Windows is `beacon-windows-amd64.exe`, which the shell above does not cover.
+
+`~/bin` is enough here because nothing on a workstation needs root: `beacon
+login`, `ssh` and `forward` all run as you. Make sure it is on your `PATH`, and
+that the `PATH` your ssh config sees includes it, since `ProxyCommand` runs
+through a shell.
+
+Each release also publishes `SHA256SUMS`:
+
+```sh
+curl -fsSLO "https://github.com/bolchisb/go-beacon/releases/latest/download/SHA256SUMS"
+grep " beacon-$os-$arch$" SHA256SUMS | shasum -a 256 -c -
+```
 
 > [!TIP]
 > Fetching the binary with `wget` or `curl` also avoids the quarantine flag macOS
@@ -699,13 +744,13 @@ has to be on `PATH`:
 
 ```sh
 mkdir -p ~/bin
-wget -qO ~/bin/beacon https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-darwin-arm64
+curl -fsSL -o ~/bin/beacon \
+  "https://github.com/bolchisb/go-beacon/releases/latest/download/beacon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 chmod +x ~/bin/beacon
 ```
 
-Substitute the file name for your platform. [Setting up your
-workstation](#setting-up-your-workstation) has the checksums, the macOS
-quarantine note and the rest of the detail.
+[Setting up your workstation](#setting-up-your-workstation) has the checksums,
+the macOS quarantine note and the rest of the detail.
 
 Then the relay it should talk to, and a session on it:
 
