@@ -57,6 +57,17 @@ func handleForward(stream net.Conn, br *bufio.Reader) {
 		return
 	}
 
+	// The embedded ssh server answers here rather than through a dialled
+	// address: it never binds a port, so there is nothing to dial.
+	if service == protocol.ServiceDev {
+		if err := protocol.WriteForwardStatus(stream, nil); err != nil {
+			stream.Close()
+			return
+		}
+		serveEmbeddedSSH(stream)
+		return
+	}
+
 	addr, ok := services[service]
 	if !ok {
 		slog.Warn("forward: service not offered", "service", service)

@@ -136,6 +136,10 @@ func runAgent(ctx context.Context, cfg *resolved) error {
 		}
 	}
 
+	if w := detectWSL(); w.Status != "absent" {
+		slog.Info("wsl", "status", w.Status, "distros", w.Distros, "detail", w.Detail)
+	}
+
 	slog.Info("agent starting", "id", hello.AgentID, "server", cfg.Server,
 		"platform", hello.OS+"/"+hello.Arch, "version", version)
 

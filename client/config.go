@@ -46,6 +46,10 @@ type Config struct {
 	// half to this agent's id, until it expires.
 	Assertion string `json:"assertion,omitempty"`
 
+	// SSHHostKey is the embedded ssh server's host key, generated on first use.
+	// Stable so a client is not warned about a changed key on every reconnect.
+	SSHHostKey string `json:"ssh_host_key,omitempty"`
+
 	// AutoUpdate is a pointer so that an absent field means enabled: an agent
 	// on a machine nobody can reach must not be left behind by a config written
 	// before the setting existed.
@@ -124,6 +128,7 @@ func loadConfig(flags map[string]string) (*resolved, error) {
 		r.Session = fc.Session
 		r.AgentKey = fc.AgentKey
 		r.Assertion = fc.Assertion
+		r.SSHHostKey = fc.SSHHostKey
 	}
 
 	r.set(keyServer, os.Getenv("BEACON_SERVER"), fromEnv)
@@ -224,7 +229,17 @@ func readConfigFile(path string) (Config, bool, error) {
 }
 
 func saveConfig(c Config) (string, error) {
-	path := configPath()
+	return saveConfigTo(configPath(), c)
+}
+
+// saveConfigTo writes to an explicit path. A per-user install needs this:
+// configPath resolves to the machine file until the user one exists, so
+// letting it choose would write the first config to the wrong place and then
+// read it back from there forever.
+func saveConfigTo(path string, c Config) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("no config path")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}

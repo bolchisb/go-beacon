@@ -124,6 +124,11 @@ func installPlan(cfg *resolved, target string) string {
 	return b.String()
 }
 
+// runAsAccount and runAsPassword are set by `beacon install --run-as`. Empty
+// means LocalSystem, which is the default and the right one for a machine
+// nobody sits at.
+var runAsAccount, runAsPassword string
+
 func serviceInstall(target string) error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -138,13 +143,29 @@ func serviceInstall(target string) error {
 		existing.Close()
 	}
 
-	s, err := m.CreateService(winServiceName, target, mgr.Config{
+	cfg := mgr.Config{
 		DisplayName:  winDisplayName,
 		Description:  winDescription,
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
-	}, "run")
+	}
+	if runAsAccount != "" {
+		cfg.ServiceStartName = runAsAccount
+		cfg.Password = runAsPassword
+	}
+
+	s, err := m.CreateService(winServiceName, target, cfg, "run")
 	if err != nil {
+		if runAsAccount != "" {
+			// The usual cause, and it is not something this can fix from here:
+			// granting SeServiceLogonRight needs the LSA policy APIs. Saying
+			// exactly which right is missing beats a wrapped Win32 error.
+			return fmt.Errorf("registering the service as %s failed: %w\n\n"+
+				"If this is a logon-rights problem, grant the account the "+
+				"\"Log on as a service\" right:\n"+
+				"  secpol.msc -> Local Policies -> User Rights Assignment -> Log on as a service",
+				runAsAccount, err)
+		}
 		return err
 	}
 	defer s.Close()

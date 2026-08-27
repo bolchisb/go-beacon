@@ -26,12 +26,27 @@ func startPTY() (ptyTerm, error) {
 		return nil, fmt.Errorf("cannot open a console (needs windows 10 1809 or newer): %w", err)
 	}
 
-	shell := windowsShell()
-	cmd := p.Command(shell)
+	return startPTYOn(p, windowsShell(), nil, nil)
+}
+
+// startPTYWith runs a specific program on a ConPTY. The ssh server needs this
+// to run a requested command, and it is how a WSL shell is launched where one
+// is reachable.
+func startPTYWith(name string, args []string, env []string) (ptyTerm, error) {
+	p, err := xpty.New()
+	if err != nil {
+		return nil, fmt.Errorf("cannot open a console (needs windows 10 1809 or newer): %w", err)
+	}
+	return startPTYOn(p, name, args, env)
+}
+
+func startPTYOn(p xpty.Pty, name string, args []string, env []string) (ptyTerm, error) {
+	cmd := p.Command(name, args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, env...)
 	if err := cmd.Start(); err != nil {
 		p.Close()
-		return nil, fmt.Errorf("cannot start %s: %w", shell, err)
+		return nil, fmt.Errorf("cannot start %s: %w", name, err)
 	}
 	return &windowsPTY{pty: p, cmd: cmd}, nil
 }

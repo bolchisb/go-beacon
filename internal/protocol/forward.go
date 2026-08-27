@@ -23,6 +23,17 @@ const StreamForward = "forward"
 const (
 	ServiceRDP = "rdp"
 	ServiceSSH = "ssh"
+
+	// ServiceDev reaches the ssh server embedded in the agent, rather than a
+	// port on the target. Reserved: it is answered by the agent itself and can
+	// never be pointed at an address, which is what keeps it from becoming a
+	// route into the network behind the machine.
+	//
+	// Separate from ServiceSSH on purpose. That one forwards to the target's
+	// own sshd, with the target's accounts and keys; this one is the agent
+	// answering, and needs neither. Silently substituting one for the other
+	// would change who authenticates without saying so.
+	ServiceDev = "dev"
 )
 
 // WriteForwardTarget names the service on a freshly opened forward stream.
