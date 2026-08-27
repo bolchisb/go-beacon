@@ -218,6 +218,14 @@ func readConfigFile(path string) (Config, bool, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return Config{}, false, nil
 	}
+	// A machine config we are not allowed to read is not our config. On a
+	// workstation /etc/beacon/config.json belongs to an installed agent and is
+	// root owned by design; treating that as a fatal error made every command
+	// fail for anyone who was not root, including the ones that only ever
+	// wanted the per-user file.
+	if errors.Is(err, fs.ErrPermission) && path == machineConfigPath() {
+		return Config{}, false, nil
+	}
 	if err != nil {
 		return Config{}, false, err
 	}

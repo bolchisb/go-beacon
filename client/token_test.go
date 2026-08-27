@@ -158,3 +158,22 @@ func TestUserConfigPathIsSetOnEveryPlatform(t *testing.T) {
 		t.Fatal("no per-user config path on this platform")
 	}
 }
+
+func TestAnUnreadableMachineConfigIsNotFatal(t *testing.T) {
+	// On a workstation the machine config belongs to an installed agent and is
+	// root owned. Every command failing for anyone who is not root -- including
+	// the ones that only wanted the per-user file -- is the bug this prevents.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which can read it")
+	}
+	cfg, exists, err := readConfigFile(machineConfigPath())
+	if err != nil {
+		t.Fatalf("an unreadable machine config was fatal: %v", err)
+	}
+	if exists {
+		t.Skip("this machine has a readable config there")
+	}
+	if cfg.Server != "" {
+		t.Error("a config came back from a file that could not be read")
+	}
+}
