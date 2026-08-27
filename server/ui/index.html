@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>go-beacon</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>go&#8209;beacon</h1>
+  <div class="stats">
+    <span><b id="stat-online">0</b> online</span>
+    <span><b id="stat-known">0</b> known</span>
+    <span>uptime <b id="stat-uptime">&mdash;</b></span>
+    <span>v<b id="stat-version">&mdash;</b></span>
+    <span id="stat-link" class="down">disconnected</span>
+    <span id="stat-vault" class="vault" title="Vault seal state">vault &mdash;</span>
+    <span id="stat-operator" class="operator"></span>
+    <button type="button" id="account-open" hidden>Account</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>Agents</h2>
+    <table id="agents">
+      <thead>
+        <tr>
+          <th>State</th><th>ID</th><th>Host</th><th>Platform</th><th>Remote</th>
+          <th>For</th><th class="num">RTT</th><th class="num">Streams</th>
+          <th class="num">In</th><th class="num">Out</th><th class="num">Reconn.</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p id="empty">No agent has connected yet.</p>
+  </section>
+
+  <section>
+    <h2>Events</h2>
+    <ul id="events"></ul>
+  </section>
+
+</main>
+
+<dialog id="account">
+  <form id="password-form" autocomplete="off" method="dialog">
+    <header>
+      <h2>Change password</h2>
+      <button type="button" id="account-close" aria-label="Close">&times;</button>
+    </header>
+
+    <label>
+      Current password
+      <input type="password" name="current_password" autocomplete="current-password" required>
+    </label>
+    <label>
+      New password
+      <input type="password" name="password" placeholder="12+ recommended"
+             autocomplete="new-password" required>
+    </label>
+    <label>
+      Repeat the new password
+      <input type="password" name="password_confirm" autocomplete="new-password" required>
+    </label>
+
+    <p class="hint">Every other session is signed out. Yours stays open.</p>
+    <p id="password-note" role="status"></p>
+
+    <footer>
+      <button type="button" class="ghost" id="account-cancel">Cancel</button>
+      <button type="submit" id="password-submit">Change password</button>
+    </footer>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

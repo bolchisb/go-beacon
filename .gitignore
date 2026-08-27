@@ -1,0 +1,50 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/go-beacon
+/bin/
+/dist/
+
+# Test & coverage
+*.test
+*.out
+coverage.*
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendor (uncomment if not vendoring)
+# /vendor/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+# Vault unseal shares and root token. These live in a named volume at runtime;
+# this is a backstop in case one is ever pulled out for inspection.
+unseal.json
+vault/secrets/
+secrets/
+admin-token
+
+# Claude Code
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.mcp.json
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Internal engineering notes
+/notes/

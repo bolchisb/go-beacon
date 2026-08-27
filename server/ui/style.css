@@ -1,0 +1,204 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --line: #262d36;
+  --fg: #d7dee7;
+  --muted: #8b96a3;
+  --up: #3fb950;
+  --down: #f85149;
+  --accent: #58a6ff;
+  --warn: #d29922;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  align-items: baseline;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+h1 { margin: 0; font-size: 1.1rem; letter-spacing: .08em; text-transform: uppercase; }
+h2 { margin: 0 0 .75rem; font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+
+.stats { display: flex; flex-wrap: wrap; gap: 1.25rem; color: var(--muted); font-size: .85rem; }
+.stats b { color: var(--fg); font-weight: 600; }
+
+#stat-link { padding: 0 .5rem; border-radius: 3px; }
+#stat-link.up { color: var(--up); }
+#stat-link.down { color: var(--down); }
+
+main { padding: 1.5rem; display: grid; gap: 2rem; }
+
+table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr.offline td { color: var(--muted); }
+
+.dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .45rem; }
+.dot.up { background: var(--up); }
+.dot.down { background: var(--down); }
+
+button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 3px;
+  padding: .2rem .6rem;
+  margin-right: .35rem;
+  font: inherit;
+  font-size: .8rem;
+  cursor: pointer;
+}
+button:hover:enabled { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: .35; cursor: default; }
+
+#empty { color: var(--muted); font-size: .85rem; }
+
+#events {
+  list-style: none;
+  margin: 0;
+  padding: .5rem 0 0;
+  max-height: 22rem;
+  overflow-y: auto;
+  font-size: .8rem;
+}
+#events li { padding: .2rem 0; border-bottom: 1px solid var(--line); }
+#events .ts { color: var(--muted); margin-right: .6rem; }
+#events .who { color: var(--accent); margin-right: .6rem; }
+#events .connected { color: var(--up); }
+#events .disconnected, #events .kick, #events .error { color: var(--down); }
+/* an agent's own warnings: the reason a session refused to open */
+#events .warn { color: var(--warn, #d29922); }
+
+/* Copy buttons sit inside a cell, so they opt out of the framed button style
+   used for actions. They stay dim until the row is hovered: visible enough to
+   discover, quiet enough not to compete with the values themselves. */
+td.copyable { white-space: nowrap; }
+
+button.copy {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin-left: .45rem;
+  color: var(--muted);
+  opacity: .35;
+  vertical-align: -2px;
+  transition: opacity .12s, color .12s;
+}
+
+tr:hover button.copy { opacity: .8; }
+button.copy:hover:enabled { color: var(--accent); opacity: 1; border-color: transparent; }
+button.copy:focus-visible { opacity: 1; }
+/* The pointer is still over the button when the result shows, so these have to
+   outrank the hover rule or the outcome is never actually seen. */
+button.copy.ok, button.copy.ok:hover:enabled { color: var(--up); opacity: 1; }
+button.copy.bad, button.copy.bad:hover:enabled { color: var(--down); opacity: 1; }
+button.copy svg { display: block; width: 12px; height: 12px; }
+
+/* Header: Vault state, who is signed in, and the way into the account dialog. */
+.vault { padding: 0 .5rem; border-radius: 3px; }
+.vault.unsealed { color: var(--up); }
+.vault.sealed { color: var(--warn); }
+.vault.unreachable { color: var(--down); }
+.vault.absent { color: var(--muted); }
+.operator::before { content: "signed in as "; opacity: .7; }
+
+#account-open {
+  font: inherit;
+  font-size: .8rem;
+  padding: .25rem .7rem;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+#account-open:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Account dialog. <dialog> gives centring, a backdrop and Esc for free, so
+   none of that is reimplemented here. */
+dialog#account {
+  width: min(26rem, calc(100vw - 2rem));
+  padding: 0;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgb(0 0 0 / .55);
+}
+dialog#account::backdrop {
+  background: rgb(0 0 0 / .6);
+  backdrop-filter: blur(2px);
+}
+
+/* Both the box and the backdrop fade in; without the second the panel appears
+   over an already-dark screen and the motion reads as a glitch. */
+@media (prefers-reduced-motion: no-preference) {
+  dialog#account[open] { animation: dialog-in .16s ease-out; }
+  dialog#account[open]::backdrop { animation: backdrop-in .16s ease-out; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(-6px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+
+dialog#account form { display: grid; gap: .9rem; padding: 1.1rem 1.25rem 1.25rem; }
+dialog#account header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 0 .25rem;
+  margin: 0;
+  background: none;
+  border: 0;
+}
+dialog#account h2 { margin: 0; }
+dialog#account label { display: grid; gap: .3rem; font-size: .78rem; color: var(--muted);
+                       letter-spacing: .06em; text-transform: uppercase; }
+dialog#account input {
+  font: inherit;
+  padding: .5rem .6rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+dialog#account input:focus { outline: 0; border-color: var(--accent); }
+dialog#account footer { display: flex; justify-content: flex-end; gap: .6rem; margin-top: .2rem; }
+dialog#account button[type="submit"] {
+  font: inherit; padding: .45rem 1rem; border: 0; border-radius: 5px;
+  background: var(--accent); color: #06121f; font-weight: 600; cursor: pointer;
+}
+dialog#account button[type="submit"][disabled] { opacity: .55; cursor: default; }
+dialog#account .ghost {
+  font: inherit; padding: .45rem 1rem; border: 1px solid var(--line);
+  border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer;
+}
+dialog#account .ghost:hover { color: var(--fg); }
+#account-close {
+  font: inherit; font-size: 1.2rem; line-height: 1; padding: 0 .3rem;
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+}
+#account-close:hover { color: var(--fg); }
+
+.hint { font-size: .78rem; color: var(--muted); margin: 0; }
+#password-note { margin: 0; font-size: .8rem; min-height: 1.2em; }
+#password-note.ok { color: var(--up); }
+#password-note.err { color: var(--down); }

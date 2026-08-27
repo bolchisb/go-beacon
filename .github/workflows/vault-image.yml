@@ -1,0 +1,77 @@
+# The relay's Vault image: the stock Vault plus our configuration and the
+# unseal helper. Same two entry points as the server image -- a merge into
+# develop, and a tag cut on main -- so the two images move together and a
+# deployment can pin both to one tag.
+name: vault image
+
+on:
+  push:
+    branches:
+      - develop
+    tags:
+      - '*'
+    # The server image rebuilds on any change; this one only has reason to when
+    # what goes into it changes.
+    paths:
+      - 'vault/**'
+      - '.github/workflows/vault-image.yml'
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}-vault
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # full history so the tag gate below can walk back to origin/main
+          fetch-depth: 0
+
+      # A tag push carries no branch, so the only way to honour "tags on main
+      # only" is to ask git whether main contains the tagged commit.
+      - id: gate
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::tag $GITHUB_REF_NAME is not on main, nothing to build"
+              echo "build=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "tag=develop" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Nothing here is compiled, but the relay runs on both architectures and
+      # its Vault has to match wherever it is deployed.
+      - uses: docker/setup-qemu-action@v3
+        if: steps.gate.outputs.build == 'true'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.gate.outputs.build == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.gate.outputs.build == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.gate.outputs.build == 'true'
+        with:
+          # root context: the Dockerfile copies from vault/, and keeping the
+          # context at the root matches the server image
+          context: .
+          file: vault/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.gate.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

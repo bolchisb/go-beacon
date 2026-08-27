@@ -1,0 +1,242 @@
+# Production deployment. Unlike docker-compose.yml, this file never builds: it
+# runs the images published by .github/workflows/, pinned to an explicit tag so
+# a deploy is reproducible and a rollback is a tag change.
+#
+#   BEACON_IMAGE_TAG=v1.2.3 docker compose -f docker-compose.prod.yml up -d
+#
+# The relay and its Vault are tagged together and are expected to move together.
+#
+# The ${...} values below are read by Compose itself from a .env file in this
+# directory, which it loads automatically -- see .env.example for the template.
+# They are interpolation variables and never reach the container. The container
+# process is configured through `environment:` instead, so putting BEACON_LISTEN
+# in .env has no effect: the container always listens on 8080 and the host port
+# is chosen by the port mapping.
+#
+# The relay is expected to sit behind a TLS-terminating reverse proxy. Two
+# things the proxy must get right, or the relay silently degrades: response
+# buffering off (the /api/events feed is SSE) and no idle or read timeout on
+# /agent/connect (a healthy tunnel is quiet for minutes at a time).
+#
+# ---------------------------------------------------------------------------
+# UNSEALING
+#
+# Vault comes back sealed after every restart. beacon-vault-unseal watches for
+# that and opens it, so a host reboot needs nobody. The shares it uses live in
+# the vault-unseal volume, on this host, next to the data they open -- a chosen
+# trade against a dependency on a cloud KMS, not an oversight. It means the two
+# volumes have very different handling: vault-data may be backed up, and
+# vault-unseal must never end up in the same archive.
+#
+# While Vault is sealed or down the relay keeps verifying agents that already
+# hold a credential, because it caches the transit public keys. Only enrolment
+# and renewal stop.
+# ---------------------------------------------------------------------------
+services:
+  beacon-server:
+    image: ghcr.io/bolchisb/go-beacon-server:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-server
+    # a moving tag such as develop would otherwise keep serving the local copy
+    pull_policy: always
+    environment:
+      BEACON_LISTEN: ":8080"
+      # Gates /ui, /api and /mcp. Read from a mounted file rather than passed
+      # in the environment: this is the value that grants command execution on
+      # every connected machine, and an environment variable is visible to
+      # `docker inspect` and to anything that dumps the environment.
+      BEACON_ADMIN_TOKEN_FILE: "/run/secrets/beacon_admin_token"
+      BEACON_VAULT_ADDR: "http://vault:8200"
+      BEACON_VAULT_TRANSIT_KEY: "beacon-agent-assertions"
+      # No Vault credential in this environment at all. Vault Agent exchanges a
+      # wrapped, single-use secret id for a short-lived token, keeps it renewed,
+      # and the relay only ever reads that file.
+      BEACON_VAULT_TOKEN_FILE: "/agent/token"
+    ports:
+      # loopback by default: publish on a routable address only once a proxy
+      # fronts it, or set BEACON_BIND to the interface the proxy reaches
+      - "${BEACON_BIND:-127.0.0.1}:${BEACON_PORT:-8080}:8080"
+    depends_on:
+      # service_started, not service_healthy, and deliberately: the relay is
+      # designed to keep serving a connected fleet through a Vault outage, so
+      # making it wait for Vault would reintroduce the coupling that design
+      # exists to avoid.
+      vault:
+        condition: service_started
+    restart: unless-stopped
+
+    # The image is a static binary on scratch. It writes nothing outside /pki,
+    # needs no capabilities and never escalates.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # scratch carries no /etc/passwd, so the uid has to be numeric. The named
+    # volume needs chowning to this uid: docker volume create leaves it root.
+    user: "65532:65532"
+
+    volumes:
+      - beacon-state:/pki
+      # Read-only: the relay consumes the token sink, it never writes to it.
+      - vault-agent:/agent:ro
+
+    secrets:
+      - beacon_admin_token
+
+    # HEALTHCHECK comes from the image (the binary probes itself); it is
+    # inherited here and deliberately not redefined.
+
+    # A relay is I/O bound and holds one goroutine pair per tunnel. The limits
+    # are a blast radius, not a target -- raise them with the agent count.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+        reservations:
+          memory: 64M
+
+    # Without a cap the activity log grows until the host fills up.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # Long enough for in-flight sessions to drain; the server shuts down in 5s.
+    stop_grace_period: 30s
+
+  vault:
+    image: ghcr.io/bolchisb/go-beacon-vault:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-vault
+    pull_policy: always
+    # No `ports`. Vault is reachable only from the relay and the unseal
+    # supervisor, over the compose network. The listener itself binds
+    # 0.0.0.0:8200 inside the container, which is what lets those two reach it;
+    # not publishing a port is what keeps everyone else out.
+    expose:
+      - "8200"
+    environment:
+      # For the CLI inside this container -- the healthcheck below talks to its
+      # own listener. Other services address Vault as http://vault:8200.
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    # The configuration is baked into the image, so nothing here can drift out
+    # of step with the binary it configures.
+    #
+    # Vault mlocks its memory so unsealed key material is never written to
+    # swap. Two separate things have to be true for that to work, and only one
+    # of them is a capability:
+    #
+    # IPC_LOCK is granted below, but the image runs as uid 100 (vault), and a
+    # non-root process gets a capability into its effective set only if the
+    # binary carries it as a file capability. /bin/vault does not, and
+    # no-new-privileges would suppress file capabilities anyway. So the cap is
+    # inert here; it is kept because it costs nothing and is what makes this
+    # work if the image ever runs as root or ships setcap'd.
+    #
+    # What actually gates the lock is RLIMIT_MEMLOCK, which Docker defaults to
+    # 8 MiB. Vault tries to lock more than that and dies with "Failed to lock
+    # memory: cannot allocate memory" -- an ENOMEM from the rlimit, not a
+    # permission error, which is why it reads like a host problem and is not.
+    # Lifting the limit lets an unprivileged process lock all it needs, so the
+    # container keeps both a non-root user and no-new-privileges.
+    cap_add:
+      - IPC_LOCK
+    ulimits:
+      memlock: -1
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - vault-data:/vault/file
+    healthcheck:
+      # Exit 0 unsealed, 2 sealed, 1 unreachable. Sealed counts as unhealthy on
+      # purpose: the unseal supervisor should have fixed it, and a Vault that
+      # stays sealed is a fault worth surfacing rather than tolerating.
+      test: ["CMD", "vault", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    stop_grace_period: 30s
+
+  vault-unseal:
+    image: ghcr.io/bolchisb/go-beacon-vault:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-vault-unseal
+    pull_policy: always
+    entrypoint: ["beacon-vault-unseal"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      # Its own volume, and the only container that mounts it.
+      - vault-unseal:/unseal
+      # Writable: this is where the wrapped secret id for Vault Agent is left.
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  vault-agent:
+    image: ghcr.io/bolchisb/go-beacon-vault:${BEACON_IMAGE_TAG:?set BEACON_IMAGE_TAG, e.g. v1.2.3}
+    container_name: beacon-vault-agent
+    pull_policy: always
+    entrypoint: ["vault", "agent", "-config=/vault/beacon/agent.hcl"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - vault-agent:/agent
+    depends_on:
+      vault:
+        condition: service_started
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+secrets:
+  # A file on the host, deliberately outside this repository so it can never be
+  # picked up by an image build context.
+  #
+  # It must be owned by uid 65532, which is what beacon-server runs as. Compose
+  # bind-mounts this file as it finds it: uid, gid and mode under a service's
+  # secrets entry are Swarm-only and are silently ignored here. A root-owned
+  # 0600 file is unreadable to the relay, which then refuses to start rather
+  # than start without a gate.
+  #
+  #   umask 077 && openssl rand -base64 32 > /tmp/beacon-token
+  #   sudo install -D -m 0400 -o 65532 -g 65532 /tmp/beacon-token /etc/beacon/admin-token
+  #   shred -u /tmp/beacon-token
+  beacon_admin_token:
+    file: ${BEACON_ADMIN_TOKEN_FILE:-/etc/beacon/admin-token}
+
+volumes:
+  beacon-state:
+  # Holds the sealed Vault. Losing it loses the signing key and with it every
+  # agent credential: back it up.
+  vault-data:
+  # Holds the unseal shares and the root token. Back it up too -- losing it
+  # makes vault-data unopenable -- but never into the same archive, or the
+  # backup carries both the lock and its key.
+  vault-unseal:
+  # role id, the wrapped secret id while it is in transit, and the token sink.
+  # Nothing here is long-lived; it does not need backing up.
+  vault-agent:
