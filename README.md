@@ -490,6 +490,20 @@ shell inside WSL where the agent can reach one.
 Point VS Code's **Remote - SSH** at `target-01-dev` and everything runs on the
 target, including SFTP, which is what lets the editor actually open files.
 
+Ports forward too, so a dev server you start on the target opens in a browser
+on your laptop — the editor's **Ports** panel, or `ssh -L` by hand:
+
+```sh
+ssh -L 3000:127.0.0.1:3000 target-01-dev
+```
+
+> [!NOTE]
+> A forward may only name the target's own loopback. That is the same rule the
+> `forward` service follows for the same reason: an agent that could be told to
+> dial any address would be a route into the network behind it, which is
+> exactly what this design refuses to be. A dev server lives on localhost, and
+> that is what this is for.
+
 > [!NOTE]
 > `dev` and `ssh` are separate services on purpose. Substituting one for the
 > other would change who authenticates without saying so.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -161,4 +162,127 @@ func asExitError(err error, target **xssh.ExitError) bool {
 		*target = e
 	}
 	return ok
+}
+
+// TestEmbeddedSSHKeepsQuotingIntact is the regression for the bug that made
+// scp and rsync fail on any path with a space in it: the command was taken
+// from Session.Command(), which the library had already split with shlex, and
+// re-joined on spaces. The shell then split it a second time.
+func TestEmbeddedSSHKeepsQuotingIntact(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("needs a posix shell")
+	}
+	c := dialEmbedded(t)
+
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	// One argument, containing a space. Two arguments would print them joined
+	// by a newline, which is exactly what this is checking cannot happen.
+	out, err := sess.Output(`printf '%s\n' 'one two'`)
+	if err != nil {
+		t.Fatalf("command failed: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "one two" {
+		t.Fatalf("quoting was lost: got %q, want %q", got, "one two")
+	}
+}
+
+// TestEmbeddedSSHReportsTheExitCodeOfATerminal covers the other half of the
+// exit-code path. Without a terminal the code came from cmd.Run; with one, the
+// session used to exit 0 whatever happened, because it stopped waiting as soon
+// as either copy direction finished and never asked the program.
+func TestEmbeddedSSHReportsTheExitCodeOfATerminal(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("needs a posix shell")
+	}
+	c := dialEmbedded(t)
+
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	if err := sess.RequestPty("xterm", 24, 80, xssh.TerminalModes{}); err != nil {
+		t.Fatal(err)
+	}
+	err = sess.Run("exit 7")
+	var exit *xssh.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("expected an exit error, got %v", err)
+	}
+	if exit.ExitStatus() != 7 {
+		t.Fatalf("exit code through a terminal: got %d, want 7", exit.ExitStatus())
+	}
+}
+
+// TestEmbeddedSSHDrainsOutputWhenStdinCloses is the truncation half of the same
+// bug. A client that closes its own input -- an editor, or a plain redirect
+// from /dev/null -- used to end the session before the program had written.
+func TestEmbeddedSSHDrainsOutputWhenStdinCloses(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("needs a posix shell")
+	}
+	c := dialEmbedded(t)
+
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	if err := sess.RequestPty("xterm", 24, 80, xssh.TerminalModes{}); err != nil {
+		t.Fatal(err)
+	}
+	sess.Stdin = strings.NewReader("")
+	out, err := sess.Output("sleep 0.2; printf done")
+	if err != nil {
+		t.Fatalf("command failed: %v", err)
+	}
+	if !strings.Contains(string(out), "done") {
+		t.Fatalf("output was cut off: %q", string(out))
+	}
+}
+
+// TestBuildFailureIsNotRemembered is the supervision property: a server that
+// could not be built must not poison every later connection. Caching the error
+// would leave the service dead until an agent restart, on a machine whose only
+// route in is the tunnel that agent serves.
+func TestBuildFailureIsNotRemembered(t *testing.T) {
+	resetSSHServer()
+	t.Cleanup(resetSSHServer)
+
+	broken := &Config{SSHHostKey: "not base64 and not a key"}
+	if _, err := embeddedSSH(broken); err == nil {
+		t.Fatal("an unusable host key should fail the build")
+	}
+
+	dir := t.TempDir()
+	t.Setenv("BEACON_CONFIG", filepath.Join(dir, "config.json"))
+	if _, err := embeddedSSH(&Config{AgentID: "test"}); err != nil {
+		t.Fatalf("the next attempt should build a server, got %v", err)
+	}
+}
+
+func TestForwardsOnlyToLoopback(t *testing.T) {
+	for _, c := range []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"localhost", true},
+		{"LocalHost", true},
+		{"::1", true},
+		{"10.0.0.5", false},
+		{"github.com", false},
+		{"", false},
+	} {
+		if got := isLoopbackHost(c.host); got != c.want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", c.host, got, c.want)
+		}
+	}
 }
