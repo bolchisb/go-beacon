@@ -47,6 +47,11 @@ func installPlan(cfg *resolved, target string) string {
 	return b.String()
 }
 
+// runAsAccount exists so the install command compiles the same way on every
+// platform. Running a unix service as another user is the service manager's
+// job, through its own unit file, not something to reimplement here.
+var runAsAccount, runAsPassword string
+
 func serviceInstall(target string) error {
 	if runtime.GOOS == "darwin" {
 		if err := os.MkdirAll(filepath.Dir(launchdPlist), 0o755); err != nil {

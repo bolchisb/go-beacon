@@ -25,6 +25,8 @@ func cmdInstall(args []string) error {
 	fs.String(keyID, "", "agent identity shown in the dashboard")
 	fs.String(keyCA, "", "PEM bundle trusted in addition to the system roots")
 	fs.String(keyUser, "", "operator username to enrol this machine with")
+	perUser := fs.Bool("user", false, "install for the current user only, with no elevation (windows)")
+	runAs := fs.String("run-as", "", "windows account the service should run as, instead of LocalSystem")
 	dryRun := fs.Bool("dry-run", false, "print what would be done and change nothing")
 	fs.Usage = func() {
 		usageFor(fs, "beacon install --server URL", "Install the agent as a system service.")
@@ -33,19 +35,43 @@ func cmdInstall(args []string) error {
 		return err
 	}
 
+	if *perUser && *runAs != "" {
+		return fmt.Errorf("--user and --run-as are different ways to leave LocalSystem; pick one")
+	}
+
 	cfg, err := loadConfig(explicitFlags(fs))
 	if err != nil {
 		return err
 	}
+
 	target := installPath()
+	if *perUser {
+		target = userInstallPath()
+		if target == "" {
+			return fmt.Errorf("--user needs LOCALAPPDATA, which only exists on windows")
+		}
+	}
 
 	if *dryRun {
 		fmt.Print(installPlan(cfg, target))
 		return nil
 	}
 
-	if err := requireElevation(); err != nil {
-		return err
+	// A per-user install touches nothing outside the user's own profile, so
+	// asking for elevation would be theatre.
+	if !*perUser {
+		if err := requireElevation(); err != nil {
+			return err
+		}
+	}
+
+	if *runAs != "" {
+		runAsAccount = *runAs
+		pw, err := promptPassword(fmt.Sprintf("Password for %s: ", *runAs))
+		if err != nil {
+			return err
+		}
+		runAsPassword = pw
 	}
 
 	// Enrolment first: it needs a human, and failing here should leave the
@@ -56,21 +82,36 @@ func cmdInstall(args []string) error {
 
 	before, _ := serviceStatus()
 
-	step("installing binary")
-	if err := copyExecutable(target); err != nil {
-		return err
-	}
-	step("writing config")
-	if _, err := saveConfig(cfg.Config); err != nil {
-		return err
-	}
-	step("registering service")
-	if err := serviceInstall(target); err != nil {
-		return err
-	}
-	step("starting service")
-	if err := serviceStart(); err != nil {
-		return err
+	if *perUser {
+		step("installing for this user")
+		if err := userInstall(target); err != nil {
+			return err
+		}
+		step("writing config")
+		if _, err := saveConfigTo(userConfigPath(), cfg.Config); err != nil {
+			return err
+		}
+		step("starting")
+		if err := userStart(); err != nil {
+			return err
+		}
+	} else {
+		step("installing binary")
+		if err := copyExecutable(target); err != nil {
+			return err
+		}
+		step("writing config")
+		if _, err := saveConfig(cfg.Config); err != nil {
+			return err
+		}
+		step("registering service")
+		if err := serviceInstall(target); err != nil {
+			return err
+		}
+		step("starting service")
+		if err := serviceStart(); err != nil {
+			return err
+		}
 	}
 
 	state := "INSTALLED"
@@ -122,6 +163,24 @@ func cmdUninstall(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	// A per-user install has no service and needed no elevation to create, so
+	// it must not need any to remove. Detecting rather than asking keeps the
+	// command the same one either way.
+	if userInstalled() {
+		if err := userUninstall(); err != nil {
+			return err
+		}
+		if p := userConfigPath(); p != "" {
+			_ = os.Remove(p)
+		}
+		for _, p := range socketPaths() {
+			os.Remove(p)
+		}
+		fmt.Println("removed the per-user install")
+		return nil
+	}
+
 	if err := requireElevation(); err != nil {
 		return err
 	}
@@ -152,6 +211,26 @@ func cmdServiceControl(name string, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	if userInstalled() {
+		var err error
+		switch name {
+		case "start":
+			err = userStart()
+		case "stop":
+			err = userStop()
+		case "restart":
+			if err = userStop(); err == nil {
+				err = userStart()
+			}
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: done (per-user install)\n", name)
+		return nil
+	}
+
 	if err := requireElevation(); err != nil {
 		return err
 	}

@@ -229,7 +229,17 @@ func readConfigFile(path string) (Config, bool, error) {
 }
 
 func saveConfig(c Config) (string, error) {
-	path := configPath()
+	return saveConfigTo(configPath(), c)
+}
+
+// saveConfigTo writes to an explicit path. A per-user install needs this:
+// configPath resolves to the machine file until the user one exists, so
+// letting it choose would write the first config to the wrong place and then
+// read it back from there forever.
+func saveConfigTo(path string, c Config) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("no config path")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
