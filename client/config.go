@@ -218,6 +218,14 @@ func readConfigFile(path string) (Config, bool, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return Config{}, false, nil
 	}
+	// A machine config we are not allowed to read is not our config. On a
+	// workstation /etc/beacon/config.json belongs to an installed agent and is
+	// root owned by design; treating that as a fatal error made every command
+	// fail for anyone who was not root, including the ones that only ever
+	// wanted the per-user file.
+	if errors.Is(err, fs.ErrPermission) && path == machineConfigPath() {
+		return Config{}, false, nil
+	}
 	if err != nil {
 		return Config{}, false, err
 	}
@@ -228,8 +236,46 @@ func readConfigFile(path string) (Config, bool, error) {
 	return c, true, nil
 }
 
+// saveConfig writes to wherever this config already lives, falling back to the
+// per-user file when the machine one is not ours to write.
+//
+// The fallback is what makes a workstation work without root. An installed
+// agent runs as root and writes the machine file; a person running `beacon
+// login` on their laptop has no business needing sudo to record their own
+// session, and would otherwise be told to use it for a file that does not
+// exist yet.
 func saveConfig(c Config) (string, error) {
-	return saveConfigTo(configPath(), c)
+	path := configPath()
+	if writableConfig(path) {
+		return saveConfigTo(path, c)
+	}
+	if user := userConfigPath(); user != "" {
+		return saveConfigTo(user, c)
+	}
+	return saveConfigTo(path, c)
+}
+
+// writableConfig reports whether we could write this path: either the file
+// exists and opens for writing, or its directory does and we can create it.
+func writableConfig(path string) bool {
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		f.Close()
+		return true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+	probe := filepath.Join(dir, ".beacon-write-probe")
+	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(probe)
+	return true
 }
 
 // saveConfigTo writes to an explicit path. A per-user install needs this:

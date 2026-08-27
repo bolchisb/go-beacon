@@ -12,34 +12,47 @@ import (
 
 // configPath finds this agent's config.
 //
-// On Windows there are two possible homes, because an agent can be installed
-// two ways: as a machine-wide service, or per user with no elevation at all.
-// The per-user file wins when it exists, so a user install shadows a machine
-// one for that user rather than fighting it. Nothing has to be told which mode
-// it is in.
+// Two possible homes on every platform, because there are two kinds of user.
+// An installed agent runs as a service and keeps its config machine-wide, root
+// owned and unreadable to anyone else -- it holds that machine's identity. A
+// person running `beacon ssh` or `beacon forward` on their own laptop is not
+// that, and must not need root to read a file about their own session.
+//
+// The per-user file wins when it exists, so a workstation config shadows a
+// machine one for that user rather than fighting it, and nothing has to be told
+// which case it is in.
 func configPath() string {
 	if p := os.Getenv("BEACON_CONFIG"); p != "" {
 		return p
 	}
-	if runtime.GOOS == "windows" {
-		if user := userConfigPath(); user != "" {
-			if _, err := os.Stat(user); err == nil {
-				return user
-			}
+	if user := userConfigPath(); user != "" {
+		if _, err := os.Stat(user); err == nil {
+			return user
 		}
+	}
+	return machineConfigPath()
+}
+
+func machineConfigPath() string {
+	if runtime.GOOS == "windows" {
 		return filepath.Join(programData(), "beacon", "config.json")
 	}
 	return "/etc/beacon/config.json"
 }
 
-// userConfigPath is where a per-user install keeps its config. Empty when the
-// platform has no such notion.
+// userConfigPath is the per-user config. On Windows it is where a --user
+// install lives; everywhere else it is what a workstation uses, so that
+// ProxyCommand -- which ssh runs as you, not as root -- can read it.
 func userConfigPath() string {
-	if runtime.GOOS != "windows" {
-		return ""
+	if runtime.GOOS == "windows" {
+		dir := os.Getenv("APPDATA")
+		if dir == "" {
+			return ""
+		}
+		return filepath.Join(dir, "beacon", "config.json")
 	}
-	dir := os.Getenv("APPDATA")
-	if dir == "" {
+	dir, err := os.UserConfigDir()
+	if err != nil {
 		return ""
 	}
 	return filepath.Join(dir, "beacon", "config.json")
