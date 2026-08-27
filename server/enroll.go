@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -40,6 +41,10 @@ type challenges struct {
 
 func newChallenges() *challenges { return &challenges{seen: map[string]time.Time{}} }
 
+// errTooManyChallenges is a back-pressure signal, not a fault: the caller is
+// told to come back rather than that something broke.
+var errTooManyChallenges = errors.New("too many challenges outstanding")
+
 func (c *challenges) issue() (string, error) {
 	b := make([]byte, challengeEntropy)
 	if _, err := rand.Read(b); err != nil {
@@ -50,17 +55,18 @@ func (c *challenges) issue() (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.expireLocked()
-	// A flood of unredeemed challenges must not grow without bound. Dropping
-	// the oldest is safe: the agent that asked will simply ask again.
+	// A flood of unredeemed challenges must not grow without bound, and the
+	// caller that hits the ceiling is the one that pays for it.
+	//
+	// Evicting the oldest instead was the obvious thing and was backwards: this
+	// endpoint is unauthenticated, so anyone who could reach the relay could
+	// ask for challenges faster than the two-minute expiry and push out the
+	// nonces real agents had been handed but not yet redeemed. Their handshake
+	// then failed, and a fleet reachable only through this relay could not
+	// reconnect. Refusing the new request costs the attacker everything and an
+	// honest agent one retry.
 	if len(c.seen) >= maxChallenges {
-		var oldest string
-		var at time.Time
-		for k, v := range c.seen {
-			if oldest == "" || v.Before(at) {
-				oldest, at = k, v
-			}
-		}
-		delete(c.seen, oldest)
+		return "", errTooManyChallenges
 	}
 	c.seen[n] = time.Now()
 	return n, nil
@@ -90,6 +96,13 @@ func (c *challenges) expireLocked() {
 
 func (s *Server) handleAgentChallenge(w http.ResponseWriter, r *http.Request) {
 	n, err := s.challenges.issue()
+	if errors.Is(err, errTooManyChallenges) {
+		slog.Warn("challenge refused: too many outstanding", "remote", r.RemoteAddr)
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"error": "too many challenges outstanding; try again shortly"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not issue a challenge"})
 		return
@@ -102,6 +115,10 @@ type enrollRequest struct {
 	Password  string `json:"password"`
 	AgentID   string `json:"agent_id"`
 	PublicKey string `json:"public_key"`
+
+	// Rebind says the operator knows this id already belongs to another key
+	// and means to move it. Enrolment refuses the change without it.
+	Rebind bool `json:"rebind,omitempty"`
 }
 
 // handleEnroll issues an assertion binding an agent id to the public key the
@@ -140,6 +157,22 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Who owns this name, before anything is signed for it.
+	if err := s.agentKeys.claim(agentID, req.PublicKey, req.Username, req.Rebind); err != nil {
+		var rebind *errRebindRequired
+		if errors.As(err, &rebind) {
+			slog.Warn("enrolment refused: id bound to another key",
+				"agent", agentID, "by", operatorLabel(req.Username))
+			s.events.Publish(Event{Type: "refused", AgentID: agentID,
+				Message: "enrolment refused: this id is enrolled with a different key"})
+			writeJSON(w, http.StatusConflict, map[string]string{"error": rebind.Error()})
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "could not record which key owns this id: " + err.Error()})
+		return
+	}
+
 	now := time.Now().UTC()
 	a := protocol.Assertion{
 		AgentID:   agentID,
@@ -162,7 +195,8 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	signed := protocol.SignedAssertion{Document: doc, Signature: sig}
-	slog.Info("agent enrolled", "agent", agentID, "by", req.Username, "expires", a.ExpiresAt)
+	slog.Info("agent enrolled", "agent", agentID, "by", req.Username,
+		"expires", a.ExpiresAt, "rebind", req.Rebind)
 	s.events.Publish(Event{Type: "enroll", AgentID: agentID,
 		Message: "enrolled by " + operatorLabel(req.Username)})
 

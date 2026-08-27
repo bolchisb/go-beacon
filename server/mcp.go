@@ -34,6 +34,18 @@ func newMCPServer(s *Server) *mcp.Server {
 	}, s.toolRunCommand)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "read_clipboard_image",
+		Description: "Look at an image on a connected machine's clipboard — a screenshot somebody " +
+			"copied there. Answers in words if the clipboard holds no image. PNG, up to 8 MiB.",
+	}, s.toolReadClipboardImage)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "write_clipboard_image",
+		Description: "Place a PNG image, base64 encoded, on a connected machine's clipboard, " +
+			"so a program running there can paste it. Up to 8 MiB.",
+	}, s.toolWriteClipboardImage)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read_file",
 		Description: "Read a file from a connected machine. Files larger than 4 MiB are refused.",
 	}, s.toolReadFile)

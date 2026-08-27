@@ -126,7 +126,20 @@ yields its own identity and nothing that reaches any other machine.
 
 `beacon enroll` does the same thing on a machine that is already installed —
 after an assertion expires, or when pointing an agent at a different relay —
-without touching the service.
+without touching the service. It reuses the keypair the machine already has, so
+this is a renewal and the relay treats it as one.
+
+A machine rebuilt from scratch is the exception: it generates a new key, and the
+relay refuses to move an id onto a key that is not the one holding it. Say so
+deliberately:
+
+```sh
+beacon enroll --rebind
+```
+
+The refusal is the point. Without it, an id could be pointed at another machine
+and every terminal, file transfer and assistant call aimed at that name would
+follow it — see [Security](#security).
 
 > [!NOTE]
 > Enrolment needs the relay reachable and its Vault unsealed. An agent that is
@@ -375,6 +388,18 @@ Every route below needs the agent shown as **connected** in the dashboard.
 Press **SSH** next to an agent in the dashboard. A new tab opens with a real
 terminal on that machine — a genuine pseudo-terminal, so full-screen programs,
 colours and window resizing all behave.
+
+**Pasting a screenshot.** Ctrl-V an image and it lands on the *target machine's*
+clipboard, not in the terminal. That is the only place it can usefully go: a
+terminal carries keystrokes and an image has none, so a program running in that
+shell — an assistant asking for a screenshot, an editor, anything reading the
+clipboard — was looking at the target's clipboard while the image sat on your
+laptop, and reported an empty one. The paste closes that gap; press paste again
+inside the program itself and it is there.
+
+PNG only, up to 8 MiB, and the target needs a clipboard to put it on: Windows
+and macOS always have one, a headless Linux host has none and says so. Ordinary
+text pastes are untouched and still go into the terminal.
 
 #### A shell in your own terminal
 
@@ -684,7 +709,7 @@ claude mcp add --transport http beacon https://relay.example.com/mcp \
 The header is the same operator token the dashboard uses. Without it the
 endpoint answers `401` rather than exposing any tool.
 
-It gains seven tools, each naming the agent it should act on:
+It gains nine tools, each naming the agent it should act on:
 
 | Tool | Purpose |
 | --- | --- |
@@ -695,6 +720,8 @@ It gains seven tools, each naming the agent it should act on:
 | `list_dir` | List the contents of a directory |
 | `read_clipboard` | Read the target's clipboard |
 | `write_clipboard` | Replace the target's clipboard |
+| `read_clipboard_image` | Look at an image on the target's clipboard |
+| `write_clipboard_image` | Place a PNG on the target's clipboard |
 
 Call `list_agents` first; every other tool needs an id from it. From there it is
 ordinary conversation:
@@ -718,6 +745,22 @@ a stack trace or a connection string across:
 > [!NOTE]
 > Windows and macOS always have a clipboard. A headless Linux host has none, and
 > says so rather than failing obscurely.
+
+Images have their own pair, and the direction that earns its place is reading.
+Somebody working on a machine sees something wrong, presses print screen, and
+asks about it — `read_clipboard_image` is what lets the assistant actually look,
+on a machine it has no other view of. `write_clipboard_image` goes back the
+other way, for handing a program running there something to paste. The
+[browser terminal](#browser-terminal) does the same thing with a keystroke.
+
+An empty clipboard is an answer, not a failure: asked for an image where there
+is only text, the tool says so in words rather than erroring, so the assistant
+reads it and moves on.
+
+On Linux this needs `wl-clipboard` or `xclip` — the same tools the text
+clipboard already asks for, though `xsel` can only do text, since it has no
+notion of clipboard types. On Windows it goes through PowerShell and on macOS
+through `osascript`, which is what keeps the agent a static binary with no cgo.
 
 ### Agent commands
 
@@ -895,6 +938,33 @@ file.
 opened on the target. A forwarded stream names a service, never an address, so an
 agent cannot be used as a general route into the network behind it.
 
+**What the dashboard says about encryption.** Each connected agent carries a
+padlock in the State column. Green means encrypted: either this relay terminated
+the handshake, or a proxy named in `BEACON_TRUSTED_PROXIES` did and said so. Red
+means the connection arrived in plain text. Amber is the in-between — something
+claimed `X-Forwarded-Proto: https` that the relay has no reason to believe.
+
+The distinction is the whole point, because the usual deployment leaves two ways
+in: agents arrive through a terminating proxy on 443, and the relay's own port
+stays reachable on the network for testing. Both can send the same header. So
+the relay decides by **who is speaking**, not by what the header says:
+
+```yaml
+BEACON_TRUSTED_PROXIES: "172.18.0.0/16"   # addresses or CIDRs, comma separated
+```
+
+An agent that comes through that proxy gets a padlock. One that talks to the
+relay's port directly does not, and it does not get one by claiming to — nothing
+it writes changes which peer it is. Leave the setting empty and no forwarded
+claim is believed at all: those connections show amber, saying that somebody
+asserted https and nobody checked.
+
+Under Docker or Kubernetes the proxy's address is assigned rather than chosen,
+so the useful value is the network it sits on rather than a single address.
+
+The same decision sets the `Secure` flag on operator session cookies, so the
+padlock and the cookie cannot disagree.
+
 **Agent identity.** Each agent generates a keypair on its own machine and the
 private half never leaves it. Enrolment is authorised by an operator's username
 and password, typed once by whoever is installing, used for that one request and
@@ -907,6 +977,21 @@ Challenges are single use, so a captured handshake cannot be replayed, and the
 id comes from the assertion rather than from a header, so an enrolled machine
 cannot claim to be a different one. The relay verifies both without asking
 Vault, which is why a sealed Vault stops enrolment without disconnecting anyone.
+
+**An id belongs to the key that claimed it.** The relay records which public key
+owns each agent id, so enrolling an id that already belongs to a different key
+is refused. That closes a takeover: a second connection under an existing id
+replaces the first, so without this record an operator could point a name at
+another machine and every terminal, forward and assistant call aimed at it would
+follow, while the real machine sat disconnected. Re-enrolling a machine that
+still has its key is a renewal and passes unremarked; a machine rebuilt from
+scratch needs `beacon enroll --rebind`, which is recorded against the operator
+who ran it.
+
+> [!NOTE]
+> The record is built as ids are enrolled, so it does not reach back. On a relay
+> upgraded from a build without it, the first enrolment of each id is what binds
+> that id — names already in use are claimed by whoever enrols them next.
 
 **The blast radius of a Vault outage.** The relay caches Vault's public keys, so
 a sealed or unreachable Vault stops enrolment and renewal but does not disconnect
@@ -925,10 +1010,14 @@ relay does not yet record who ran what.
 
 #### Deployment guidance
 
-- Set an operator token. Without one the relay starts, says so loudly in its
-  log, and serves all three surfaces to anyone who reaches it.
-- Keep the relay on a private interface, or behind an authenticating proxy, for
-  as long as agents remain unauthenticated.
+- Set an operator token, and keep it set. Without one the relay starts, says so
+  loudly in its log, and serves all three surfaces to anyone who reaches it.
+  Removing it after creating an operator account is quieter and worse: the gate
+  still reports itself as enabled, so nothing warns, and the token is the only
+  way back in if the password is lost or Vault is unreachable.
+- Keep the relay on a private interface, or behind an authenticating proxy.
+  Agents authenticate for themselves now, but the relay is still the one place
+  where reaching it is worth the most.
 - Vault must never be reachable by agents. It is not published in the shipped
   compose files, and it should stay that way: agents run on customer networks,
   and exposing a Vault to them is a worse exposure than the relay itself.

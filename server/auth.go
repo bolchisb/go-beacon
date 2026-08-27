@@ -43,10 +43,15 @@ type auth struct {
 	token []byte
 
 	ops *operatorStore
+
+	// proxies decides whether a forwarded protocol is believed, so the Secure
+	// flag on a session cookie and the padlock in the dashboard are answering
+	// the same question the same way.
+	proxies *proxySet
 }
 
-func newAuth(token string, ops *operatorStore) *auth {
-	a := &auth{ops: ops}
+func newAuth(token string, ops *operatorStore, proxies *proxySet) *auth {
+	a := &auth{ops: ops, proxies: proxies}
 	if token != "" {
 		a.token = []byte(token)
 	}
@@ -124,7 +129,22 @@ func (a *auth) authenticated(r *http.Request) bool {
 	return a.validSession(c.Value)
 }
 
+// matches compares a candidate against the admin token.
+//
+// The empty check is not redundant. subtle.ConstantTimeCompare reports a match
+// for two zero-length inputs, so without it an unset token made an empty
+// candidate valid -- and the dangerous shape was not the relay with no
+// credentials at all, which enabled() already reports as open, but the one with
+// an operator account and no admin token. That relay looks protected: it warns
+// about nothing, serves a login page and signs sessions with the operator's own
+// key. Yet `Authorization: Bearer ` with an empty value passed this, and so did
+// an enrolment carrying an empty password. Dropping the token from a deployment
+// after bootstrapping an account is a natural thing to do, which is exactly why
+// it must not open the door.
 func (a *auth) matches(candidate string) bool {
+	if len(a.token) == 0 {
+		return false
+	}
 	return subtle.ConstantTimeCompare([]byte(candidate), a.token) == 1
 }
 
@@ -299,7 +319,7 @@ func (a *auth) setSession(w http.ResponseWriter, r *http.Request) {
 		// Secure is set only when the request arrived over TLS: a relay reached
 		// on plain http during development would otherwise set a cookie the
 		// browser refuses to send back.
-		Secure:  isTLS(r),
+		Secure:  a.isTLS(r),
 		Expires: time.Now().Add(sessionTTL),
 	})
 }
@@ -311,7 +331,7 @@ func (a *auth) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   isTLS(r),
+		Secure:   a.isTLS(r),
 		MaxAge:   -1,
 	})
 	if wantsHTML(r) {
@@ -323,11 +343,14 @@ func (a *auth) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 // isTLS reports whether the browser reached us over https, including the common
 // case of a reverse proxy that terminated TLS and said so.
-func isTLS(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+// isTLS decides whether to mark a cookie Secure. A relay with no trusted proxy
+// configured takes the forwarded header at its word, which is what it has
+// always done and is the safe direction to be wrong in: the cost of marking a
+// cookie Secure over plain http is a browser that will not send it back, not an
+// exposure.
+func (a *auth) isTLS(r *http.Request) bool {
+	transport, _ := a.proxies.transportOf(r)
+	return transport != TransportPlain
 }
 
 func wantsHTML(r *http.Request) bool {

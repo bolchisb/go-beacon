@@ -165,7 +165,7 @@ func TestChangingThePasswordRotatesSessions(t *testing.T) {
 	if err := ops.save("alice", goodPassword, true); err != nil {
 		t.Fatal(err)
 	}
-	a := newAuth(testToken, ops)
+	a := newAuth(testToken, ops, parseProxies(""))
 
 	old := a.session(timeNowPlusHour())
 	if !a.validSession(old) {
@@ -182,7 +182,7 @@ func TestChangingThePasswordRotatesSessions(t *testing.T) {
 func TestBootstrapNeedsTheAdminTokenAndCreatesTheAccount(t *testing.T) {
 	v, _ := fakeVault(t)
 	ops := newOperatorStore(v, t.TempDir())
-	a := newAuth(testToken, ops)
+	a := newAuth(testToken, ops, parseProxies(""))
 
 	if !a.bootstrapping() {
 		t.Fatal("a relay with no account should be in setup")
@@ -242,7 +242,7 @@ func TestLoginAcceptsThePasswordAndTheRecoveryToken(t *testing.T) {
 	if err := ops.save("alice", goodPassword, true); err != nil {
 		t.Fatal(err)
 	}
-	a := newAuth(testToken, ops)
+	a := newAuth(testToken, ops, parseProxies(""))
 
 	login := func(form url.Values) int {
 		r := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(form.Encode()))

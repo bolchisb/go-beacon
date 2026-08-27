@@ -34,6 +34,11 @@ type Config struct {
 	VaultRoleID     string // BEACON_VAULT_ROLE_ID
 	VaultSecretID   string // BEACON_VAULT_SECRET_ID
 	VaultTransitKey string // BEACON_VAULT_TRANSIT_KEY
+
+	// TrustedProxies names the peers whose X-Forwarded-Proto header the relay
+	// believes: addresses or CIDR blocks, comma separated. Empty means the
+	// relay believes nobody, and reports a forwarded claim as a claim.
+	TrustedProxies string // BEACON_TRUSTED_PROXIES
 }
 
 func loadConfig() Config {
@@ -47,6 +52,7 @@ func loadConfig() Config {
 		VaultRoleID:     env("BEACON_VAULT_ROLE_ID", ""),
 		VaultSecretID:   env("BEACON_VAULT_SECRET_ID", ""),
 		VaultTransitKey: env("BEACON_VAULT_TRANSIT_KEY", "beacon-agent-assertions"),
+		TrustedProxies:  env("BEACON_TRUSTED_PROXIES", ""),
 	}
 }
 

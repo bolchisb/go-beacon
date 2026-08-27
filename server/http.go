@@ -27,6 +27,8 @@ type Server struct {
 	auth       *auth
 	vault      *vault
 	ops        *operatorStore
+	agentKeys  *agentKeys
+	proxies    *proxySet
 	challenges *challenges
 	startedAt  time.Time
 }
@@ -34,13 +36,16 @@ type Server struct {
 func newServer(cfg Config) *Server {
 	v := newVault(cfg)
 	ops := newOperatorStore(v, cfg.StateDir)
+	proxies := parseProxies(cfg.TrustedProxies)
 	s := &Server{
 		cfg:        cfg,
 		registry:   newRegistry(),
 		events:     newEventBus(),
-		auth:       newAuth(cfg.AdminToken, ops),
+		auth:       newAuth(cfg.AdminToken, ops, proxies),
 		vault:      v,
 		ops:        ops,
+		agentKeys:  newAgentKeys(v),
+		proxies:    proxies,
 		challenges: newChallenges(),
 		startedAt:  time.Now(),
 	}
@@ -67,6 +72,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/agents/{id}/kick", s.handleAgentKick)
 	mux.HandleFunc("GET /api/agents/{id}/shell", s.handleShell)
 	mux.HandleFunc("GET /api/agents/{id}/forward/{service}", s.handleForward)
+	mux.HandleFunc("POST /api/agents/{id}/clipboard/image", s.handleClipboardImage)
 
 	// MCP, for an assistant running on a developer's laptop. No method is given
 	// because the transport uses POST for calls and GET for the event stream,

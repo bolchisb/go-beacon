@@ -87,7 +87,10 @@ func (s *Server) handleAgentConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	supervise.Go("session:"+hello.AgentID, func() { s.serveSession(hello, r.RemoteAddr, sess, counted) })
+	transport, detail := s.proxies.transportOf(r)
+	supervise.Go("session:"+hello.AgentID, func() {
+		s.serveSession(hello, r.RemoteAddr, sess, counted, transport, detail)
+	})
 }
 
 // identify is the single place agent identity is established. Today it comes
@@ -117,8 +120,9 @@ func (s *Server) completeUpgrade(conn net.Conn, br *bufio.Reader) (net.Conn, err
 
 // serveSession owns an agent session for its whole life and is what notices
 // when it dies.
-func (s *Server) serveSession(h protocol.Hello, remote string, sess *yamux.Session, conn *protocol.CountingConn) {
-	rec, reconnect := s.registry.Connect(h, remote, sess, conn)
+func (s *Server) serveSession(h protocol.Hello, remote string, sess *yamux.Session, conn *protocol.CountingConn,
+	transport Transport, transportDetail string) {
+	rec, reconnect := s.registry.Connect(h, remote, sess, conn, transport, transportDetail)
 
 	msg := "connected from " + remote
 	if reconnect {

@@ -202,3 +202,10 @@ dialog#account .ghost:hover { color: var(--fg); }
 #password-note { margin: 0; font-size: .8rem; min-height: 1.2em; }
 #password-note.ok { color: var(--up); }
 #password-note.err { color: var(--down); }
+
+/* How the agent's connection reached the relay. The three colours are the
+   three answers: verified here, claimed by a proxy, and none. */
+.lock { display: inline-flex; align-items: center; margin-left: .4rem; vertical-align: -1px; }
+.lock.ok { color: var(--up); }
+.lock.claimed { color: var(--warn); }
+.lock.none { color: var(--down); }

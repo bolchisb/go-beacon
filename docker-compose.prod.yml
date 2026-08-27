@@ -47,6 +47,12 @@ services:
       BEACON_ADMIN_TOKEN_FILE: "/run/secrets/beacon_admin_token"
       BEACON_VAULT_ADDR: "http://vault:8200"
       BEACON_VAULT_TRANSIT_KEY: "beacon-agent-assertions"
+      # Whose X-Forwarded-Proto to believe. Set this to the network your
+      # terminating proxy sits on and agents arriving through it show as
+      # encrypted in the dashboard; one that reaches the relay's own port
+      # directly does not, and cannot get there by sending the header itself.
+      # Empty means no forwarded claim is believed at all.
+      # BEACON_TRUSTED_PROXIES: "172.18.0.0/16"
       # No Vault credential in this environment at all. Vault Agent exchanges a
       # wrapped, single-use secret id for a short-lived token, keeps it renewed,
       # and the relay only ever reads that file.
