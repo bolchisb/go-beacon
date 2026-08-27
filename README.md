@@ -381,10 +381,10 @@ belong to a user account, and LocalSystem is not one.
 
 ```sh
 beacon install --run-as .\alice     # a service, running as alice
-beacon install --user                # no service, no elevation at all
+beacon install --per-user            # no service, no elevation at all
 ```
 
-| | `--run-as` | `--user` |
+| | `--run-as` | `--per-user` |
 | --- | --- | --- |
 | Answers after a reboot with nobody signed in | Yes | **No** |
 | Needs an administrator to install | Yes | No |
@@ -396,7 +396,7 @@ beacon install --user                # no service, no elevation at all
 Granting it needs the LSA policy APIs, so the installer does not attempt it; if
 registration fails for that reason it names the right and where to grant it.
 
-Choose `--user` for a developer's own machine, where somebody is signed in
+Choose `--per-user` for a developer's own machine, where somebody is signed in
 anyway and WSL is the point. Choose `--run-as`, or plain LocalSystem, for
 anything that has to answer at three in the morning.
 

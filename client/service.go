@@ -19,15 +19,29 @@ type svcInfo struct {
 	Running   bool
 }
 
-func cmdInstall(args []string) error {
-	fs := flag.NewFlagSet("beacon install", flag.ExitOnError)
+// installFlags registers what `beacon install` accepts.
+//
+// Extracted so a test can register them, because the flag package panics on a
+// duplicate name at registration time rather than returning an error, and
+// `beacon install` needs elevation -- so nothing in the ordinary test run ever
+// reached the line that panicked. It shipped broken.
+//
+// Note --per-user rather than --user: keyUser is already "user", the operator
+// name this machine enrols with, and the two collided.
+func installFlags(fs *flag.FlagSet) (perUser *bool, runAs *string, dryRun *bool) {
 	fs.String(keyServer, "", "relay URL, http:// or https://")
 	fs.String(keyID, "", "agent identity shown in the dashboard")
 	fs.String(keyCA, "", "PEM bundle trusted in addition to the system roots")
 	fs.String(keyUser, "", "operator username to enrol this machine with")
-	perUser := fs.Bool("user", false, "install for the current user only, with no elevation (windows)")
-	runAs := fs.String("run-as", "", "windows account the service should run as, instead of LocalSystem")
-	dryRun := fs.Bool("dry-run", false, "print what would be done and change nothing")
+	perUser = fs.Bool("per-user", false, "install for the current user only, with no elevation (windows)")
+	runAs = fs.String("run-as", "", "windows account the service should run as, instead of LocalSystem")
+	dryRun = fs.Bool("dry-run", false, "print what would be done and change nothing")
+	return perUser, runAs, dryRun
+}
+
+func cmdInstall(args []string) error {
+	fs := flag.NewFlagSet("beacon install", flag.ExitOnError)
+	perUser, runAs, dryRun := installFlags(fs)
 	fs.Usage = func() {
 		usageFor(fs, "beacon install --server URL", "Install the agent as a system service.")
 	}
@@ -36,7 +50,7 @@ func cmdInstall(args []string) error {
 	}
 
 	if *perUser && *runAs != "" {
-		return fmt.Errorf("--user and --run-as are different ways to leave LocalSystem; pick one")
+		return fmt.Errorf("--per-user and --run-as are different ways to leave LocalSystem; pick one")
 	}
 
 	cfg, err := loadConfig(explicitFlags(fs))
@@ -48,7 +62,7 @@ func cmdInstall(args []string) error {
 	if *perUser {
 		target = userInstallPath()
 		if target == "" {
-			return fmt.Errorf("--user needs LOCALAPPDATA, which only exists on windows")
+			return fmt.Errorf("--per-user needs LOCALAPPDATA, which only exists on windows")
 		}
 	}
 

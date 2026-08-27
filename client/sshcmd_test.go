@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"sync"
 	"testing"
 
@@ -84,4 +85,17 @@ func TestFrameWriterKeepsFramesIntactUnderConcurrency(t *testing.T) {
 	if data != rounds || resize != rounds {
 		t.Fatalf("got %d data and %d resize frames, want %d of each", data, resize, rounds)
 	}
+}
+
+func TestCommandFlagsRegisterWithoutColliding(t *testing.T) {
+	// The flag package panics on a duplicate name at registration, and
+	// `beacon install` needs elevation, so nothing in an ordinary test run ever
+	// reached that line. A --user for the operator name and a --user for the
+	// install mode shipped in a release and crashed the command outright.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("registering install flags panicked: %v", r)
+		}
+	}()
+	installFlags(flag.NewFlagSet("beacon install", flag.ContinueOnError))
 }
