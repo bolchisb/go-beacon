@@ -14,8 +14,8 @@ import (
 	"strings"
 	"sync"
 
-	gssh "github.com/gliderlabs/ssh"
 	"github.com/bolchisb/go-beacon/internal/supervise"
+	gssh "github.com/gliderlabs/ssh"
 	"github.com/pkg/sftp"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -199,6 +199,7 @@ func serveSession(s gssh.Session, name string, args []string) {
 	_ = term.Close()
 	_ = s.Exit(term.Wait())
 }
+
 // sftpHandler serves the subsystem VS Code Remote-SSH and scp rely on. Without
 // it an editor connects, reports success, and then cannot open a single file.
 func sftpHandler(s gssh.Session) {
@@ -248,6 +249,29 @@ func hostKey(cfg *Config) (xssh.Signer, error) {
 		return nil, fmt.Errorf("the stored ssh host key is unusable")
 	}
 	return xssh.NewSignerFromKey(ed25519.PrivateKey(raw))
+}
+
+// persistHostKey writes the host key back to the config file and nothing else.
+//
+// The config this server was handed is a resolved one: defaults, then the file,
+// then the environment, then flags. Writing all of it back -- which is what
+// saving the resolved struct did -- persisted whatever the agent happened to
+// have in its environment, a BEACON_TOKEN included, at a moment nobody asked
+// for. `install` and `enroll` save a resolved config too, but a person ran
+// those on purpose. An inbound connection is not that.
+//
+// Failing to write is not fatal. The session works; the client sees a new host
+// key next time and says so, which beats refusing the connection.
+func persistHostKey(key string) {
+	stored, _, err := readConfigFile(configPath())
+	if err != nil {
+		slog.Warn("ssh: could not read the config to persist the host key", "err", err)
+		return
+	}
+	stored.SSHHostKey = key
+	if _, err := saveConfig(stored); err != nil {
+		slog.Warn("ssh: could not persist the host key", "err", err)
+	}
 }
 
 // runWithoutPTY handles a session with no terminal: a plain command, or a

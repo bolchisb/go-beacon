@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/creack/pty"
 )
@@ -13,6 +14,11 @@ import (
 type unixPTY struct {
 	f   *os.File
 	cmd *exec.Cmd
+
+	// A process can only be waited for once, and both Close and the session
+	// that owns the terminal need the answer.
+	waitOnce sync.Once
+	code     int
 }
 
 func startPTY() (ptyTerm, error) {
@@ -47,12 +53,17 @@ func (p *unixPTY) Resize(cols, rows uint16) error {
 	return pty.Setsize(p.f, &pty.Winsize{Cols: cols, Rows: rows})
 }
 
+func (p *unixPTY) Wait() int {
+	p.waitOnce.Do(func() { p.code = exitCodeOf(p.cmd.Wait()) })
+	return p.code
+}
+
 func (p *unixPTY) Close() error {
 	err := p.f.Close()
 	if p.cmd.Process != nil {
 		// the shell may be sitting in a child that ignores EOF on the pty
 		_ = p.cmd.Process.Kill()
-		_ = p.cmd.Wait()
+		p.Wait()
 	}
 	return err
 }

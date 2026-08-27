@@ -15,6 +15,10 @@ import (
 type ptyTerm interface {
 	io.ReadWriteCloser
 	Resize(cols, rows uint16) error
+	// Wait blocks until the program on the terminal exits and reports its
+	// status. It is safe to call more than once and from more than one
+	// goroutine: every caller gets the same answer, and Close calls it too.
+	Wait() int
 }
 
 // handlePTY runs one terminal for the lifetime of a relay stream. Terminal

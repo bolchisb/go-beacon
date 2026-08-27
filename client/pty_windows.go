@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 
 	xpty "github.com/aymanbagabas/go-pty"
 )
@@ -14,6 +15,11 @@ import (
 type windowsPTY struct {
 	pty xpty.Pty
 	cmd *xpty.Cmd
+
+	// A process can only be waited for once, and both Close and the session
+	// that owns the terminal need the answer.
+	waitOnce sync.Once
+	code     int
 }
 
 // startPTY opens a ConPTY and runs a shell attached to it. Windows has no pty
@@ -72,12 +78,17 @@ func (p *windowsPTY) Resize(cols, rows uint16) error {
 	return p.pty.Resize(int(cols), int(rows))
 }
 
+func (p *windowsPTY) Wait() int {
+	p.waitOnce.Do(func() { p.code = exitCodeOf(p.cmd.Wait()) })
+	return p.code
+}
+
 func (p *windowsPTY) Close() error {
 	err := p.pty.Close()
 	if p.cmd.Process != nil {
 		// closing the console does not always take the shell with it
 		_ = p.cmd.Process.Kill()
-		_ = p.cmd.Wait()
+		p.Wait()
 	}
 	return err
 }
